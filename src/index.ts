@@ -17,6 +17,7 @@ import { createMultiProtocolAdapter } from './_vendor/adapters/multi';
 import type { PaymentAdapter, PaymentRequirement } from './_vendor/adapters/types';
 import { wrapHandler } from './_vendor/core/observability';
 import { c2paVerify } from './service';
+import { renderLanding } from './landing';
 
 const app = new Hono<{ Bindings: ServiceEnv }>();
 
@@ -86,7 +87,19 @@ function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
 }
 
 // ── Free endpoints ──────────────────────────────────────────
+//
+// Host-based routing: one worker serves both mppfy.com apex (marketing
+// landing) and c2pa.mppfy.com (API metadata JSON). Keeps infra minimal;
+// landing HTML is cached aggressively at edge.
 app.get('/', c => {
+  const host = (c.req.header('host') ?? '').toLowerCase();
+  const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
+
+  if (isApex) {
+    return renderLanding();
+  }
+
+  // c2pa.mppfy.com (API subdomain) — return machine-readable service metadata.
   return c.json({
     service: c2paVerify.id,
     name: c2paVerify.name,
