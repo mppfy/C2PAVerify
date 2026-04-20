@@ -12,6 +12,8 @@ import { Hono } from 'hono';
 import type { ServiceEnv } from './_vendor/core/types';
 import { createMPPAdapter } from './_vendor/adapters/mpp';
 import { noneAdapter } from './_vendor/adapters/none';
+import { createX402Adapter } from './_vendor/adapters/x402';
+import { createMultiProtocolAdapter } from './_vendor/adapters/multi';
 import type { PaymentAdapter, PaymentRequirement } from './_vendor/adapters/types';
 import { wrapHandler } from './_vendor/core/observability';
 import { c2paVerify } from './service';
@@ -33,10 +35,44 @@ function getAdapter(env: ServiceEnv): PaymentAdapter {
       secretKey: env.MPP_SECRET_KEY,
       testnet: env.ENVIRONMENT !== 'production',
     });
+  } else if (mode === 'x402') {
+    cachedAdapter = buildX402Adapter(env);
+  } else if (mode === 'multi') {
+    // Dual protocol — dispatch between MPP and x402 based on request hints.
+    // Default protocol flips from 'mpp' → 'x402' after 7 days of clean prod
+    // traffic (see DEFAULT_PROTOCOL env override).
+    const mpp = createMPPAdapter({
+      recipientAddress: env.MPP_RECIPIENT_ADDRESS,
+      secretKey: env.MPP_SECRET_KEY,
+      testnet: env.ENVIRONMENT !== 'production',
+    });
+    const x402 = buildX402Adapter(env);
+    cachedAdapter = createMultiProtocolAdapter({
+      adapters: { mpp, x402 },
+      detection: {
+        defaultProtocol: env.DEFAULT_PROTOCOL ?? 'mpp',
+      },
+    });
   } else {
     throw new Error(`Unknown PAYMENT_MODE: ${mode}`);
   }
   return cachedAdapter;
+}
+
+function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
+  const recipient = env.X402_RECIPIENT_ADDRESS ?? env.MPP_RECIPIENT_ADDRESS;
+  if (!recipient) {
+    throw new Error('X402 mode requires X402_RECIPIENT_ADDRESS or MPP_RECIPIENT_ADDRESS');
+  }
+  const network: 'base' | 'base-sepolia' =
+    env.X402_NETWORK ?? (env.ENVIRONMENT === 'production' ? 'base' : 'base-sepolia');
+
+  return createX402Adapter({
+    recipientAddress: recipient,
+    network,
+    ...(env.X402_FACILITATOR_URL ? { facilitatorUrl: env.X402_FACILITATOR_URL } : {}),
+    ...(env.X402_ASSET_ADDRESS ? { assetAddress: env.X402_ASSET_ADDRESS } : {}),
+  });
 }
 
 // ── Free endpoints ──────────────────────────────────────────
@@ -121,6 +157,27 @@ app.get('/openapi.json', c => {
   const host = new URL(c.req.url).host;
   const baseUrl = `https://${host}`;
 
+  // Whether x402 is advertised in discovery. True when PAYMENT_MODE is
+  // 'x402' or 'multi'. In pure 'mpp' mode we omit x402 entirely so discovery
+  // reflects runtime capability truthfully.
+  const x402Active = c.env.PAYMENT_MODE === 'x402' || c.env.PAYMENT_MODE === 'multi';
+  const x402Network: 'base' | 'base-sepolia' =
+    c.env.X402_NETWORK ?? (isProd ? 'base' : 'base-sepolia');
+  // USDC on Base — per Circle docs. Used for x402 discovery metadata only.
+  const USDC_BASE_MAINNET = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+  const USDC_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+  const x402Asset =
+    c.env.X402_ASSET_ADDRESS ??
+    (x402Network === 'base' ? USDC_BASE_MAINNET : USDC_BASE_SEPOLIA);
+  const x402Recipient = c.env.X402_RECIPIENT_ADDRESS ?? c.env.MPP_RECIPIENT_ADDRESS;
+  // USDC has 6 decimals on Base too. "0.01" → "10000" atomic units.
+  const x402AtomicAmount = Math.round(
+    parseFloat(c2paVerify.price.amount) * 1_000_000,
+  ).toString();
+
+  const paidProtocols: string[] = ['mpp'];
+  if (x402Active) paidProtocols.push('x402');
+
   // Shape copied from a working registered service (AgentMail):
   //   free route →  x-payment-info: { protocols:['mpp'], pricingMode:'fixed', price:'0' }
   //   paid route →  x-payment-info: { ..., price, currency, method, intent, protocols, pricingMode }
@@ -138,12 +195,13 @@ app.get('/openapi.json', c => {
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
-      version: '0.1.7',
+      version: '0.2.0',
       description: c2paVerify.description,
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
-      'x-guidance':
-        'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
+      'x-guidance': x402Active
+        ? 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Dual-protocol: MPP (0.01 USDC.e on Tempo) or x402 (0.01 USDC on Base). Clients pick protocol via `Authorization: Payment` (MPP) or `X-PAYMENT` (x402) header; override with `x-payment-protocol: mpp|x402`. Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.'
+        : 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
     },
     servers: [{ url: baseUrl }],
     'x-service-info': {
@@ -154,6 +212,32 @@ app.get('/openapi.json', c => {
         llms: `${baseUrl}/llms.txt`,
       },
     },
+    // x402 discovery metadata — parsed by x402-aware clients и бьётся с
+    // `accepts: PaymentRequirements[]` в runtime 402 response на /verify.
+    // Shape mirrors PaymentRequirements from x402/types@1.1.0. Present only
+    // when x402 is active (PAYMENT_MODE='x402' or 'multi').
+    ...(x402Active
+      ? {
+          'x-x402': {
+            version: 1,
+            network: x402Network,
+            accepts: [
+              {
+                scheme: 'exact',
+                network: x402Network,
+                maxAmountRequired: x402AtomicAmount,
+                resource: `${baseUrl}/verify`,
+                description: `C2PA verification (${c2paVerify.id})`,
+                mimeType: 'application/json',
+                payTo: x402Recipient,
+                maxTimeoutSeconds: 300,
+                asset: x402Asset,
+                extra: { name: 'USD Coin', version: '2' },
+              },
+            ],
+          },
+        }
+      : {}),
     paths: {
       '/verify': {
         post: {
@@ -161,12 +245,13 @@ app.get('/openapi.json', c => {
           description:
             'Accepts multipart file upload or JSON {url}. Returns extracted C2PA manifest with trust_chain classification (valid | partial | unknown) and warnings.',
           'x-payment-info': {
-            protocols: ['mpp'],
+            protocols: paidProtocols,
             pricingMode: 'fixed',
             // Decimal-formatted USD string (6 fractional digits).
             // MPPScan renders this directly as $price.
             price: priceUsdDecimal,
             // Base-unit fields for mppx SDK / 402 challenge compatibility.
+            // MPP-oriented fields — x402 clients read top-level `x-x402`.
             amount: amountBaseUnits,
             currency,
             method: 'tempo',
@@ -196,7 +281,11 @@ app.get('/openapi.json', c => {
           },
           responses: {
             '200': { description: 'Verification result with manifest' },
-            '402': { description: 'Payment Required (MPP challenge)' },
+            '402': {
+              description: x402Active
+                ? 'Payment Required — MPP (WWW-Authenticate) or x402 ({ accepts: PaymentRequirements[] }) challenge depending on client hint'
+                : 'Payment Required (MPP challenge)',
+            },
             '413': { description: 'Asset too large (>25MB)' },
             '415': { description: 'Unsupported media type' },
             '422': { description: 'Invalid asset or no C2PA manifest' },

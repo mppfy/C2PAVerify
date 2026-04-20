@@ -16,14 +16,17 @@ export interface ServiceEnv {
   MPP_RECIPIENT_ADDRESS: string;
   MPP_SECRET_KEY: string;
   
-  // x402 config (пока stub, активируется в week 3-4)
-  X402_ENABLED?: string; // "true" | "false"
-  X402_RECIPIENT_ADDRESS?: string;
-  X402_CHAIN?: string; // "base" | "solana"
-  
+  // x402 config
+  X402_ENABLED?: string; // "true" | "false" — feature flag for dark launch
+  X402_RECIPIENT_ADDRESS?: string; // 0x... Base EOA (chain-agnostic, may equal MPP_RECIPIENT_ADDRESS)
+  X402_NETWORK?: 'base' | 'base-sepolia'; // Defaults to base-sepolia in staging, base in production
+  X402_FACILITATOR_URL?: string; // Defaults to https://x402.org/facilitator
+  X402_ASSET_ADDRESS?: string; // USDC contract — defaults per network
+  DEFAULT_PROTOCOL?: 'mpp' | 'x402'; // Fallback when client sends no hints (default: 'mpp' during shadow rollout)
+
   // Global config
   ENVIRONMENT: 'development' | 'staging' | 'production';
-  PAYMENT_MODE: 'dev' | 'mpp' | 'multi'; // Controls which adapter(s) active
+  PAYMENT_MODE: 'dev' | 'mpp' | 'x402' | 'multi'; // Controls which adapter(s) active
 }
 
 export type ServiceStatus = 'active' | 'deprecated' | 'disabled';

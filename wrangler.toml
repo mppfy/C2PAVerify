@@ -21,7 +21,13 @@ fallthrough = true
 # Local dev reuses staging D1/KV по умолчанию (safe — dev mode adapter no-op'ит payments).
 [vars]
 ENVIRONMENT = "development"
-PAYMENT_MODE = "dev"  # dev | mpp
+PAYMENT_MODE = "dev"  # dev | mpp | x402 | multi
+# x402 config (used when PAYMENT_MODE ∈ {x402, multi}). Local dev = no real
+# payments (PAYMENT_MODE=dev), так что эти значения noop для локального wrangler dev.
+# DEFAULT_PROTOCOL controls which protocol picks up requests that have no
+# wire signal — flip 'mpp' → 'x402' after 7 days of clean prod shadow traffic.
+DEFAULT_PROTOCOL = "mpp"
+X402_NETWORK = "base-sepolia"
 
 [[d1_databases]]
 binding = "DB"
@@ -49,7 +55,16 @@ routes = [
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
-PAYMENT_MODE = "mpp"  # staging uses real MPP protocol (dev mode только для local wrangler dev)
+# multi = dual protocol (MPP + x402). Staging validates x402 against Base
+# Sepolia before production cutover.
+PAYMENT_MODE = "multi"
+# During shadow rollout: MPP is the default when no protocol hint is present.
+# Flip to "x402" after 7 days of clean prod traffic + customer signal.
+DEFAULT_PROTOCOL = "mpp"
+# x402 on Base Sepolia testnet — free facilitator, testnet USDC.
+# X402_RECIPIENT_ADDRESS falls back to MPP_RECIPIENT_ADDRESS when unset.
+X402_NETWORK = "base-sepolia"
+X402_FACILITATOR_URL = "https://x402.org/facilitator"
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -75,7 +90,15 @@ routes = [
 
 [env.production.vars]
 ENVIRONMENT = "production"
+# Shadow rollout plan (see docs/v2-decide-api.md и commit message для x402):
+#  Stage 1 (now): PAYMENT_MODE="mpp", discovery advertises MPP only.
+#  Stage 2 (after staging soak): set PAYMENT_MODE="multi", DEFAULT_PROTOCOL="mpp".
+#    MPP clients keep working unchanged. x402 clients (X-PAYMENT header) get served.
+#  Stage 3 (+7 days, no incidents): DEFAULT_PROTOCOL="x402". MPP stays as fallback.
 PAYMENT_MODE = "mpp"
+DEFAULT_PROTOCOL = "mpp"
+X402_NETWORK = "base"
+X402_FACILITATOR_URL = "https://x402.org/facilitator"
 
 [[env.production.d1_databases]]
 binding = "DB"
@@ -95,3 +118,6 @@ dataset = "c2pa_verify_calls_prod"
 #   MPP_RECIPIENT_ADDRESS   — Tempo wallet 0x...
 #   MPP_SECRET_KEY          — 32-byte base64 (challenge signing)
 #   TEMPO_WALLET_PRIVATE_KEY — optional for fee-sponsorship
+#   X402_RECIPIENT_ADDRESS  — Base EOA 0x... (optional; defaults to MPP_RECIPIENT_ADDRESS
+#                             — same 0x address works across Tempo and Base because both
+#                             are EVM. Override only if wallet separation is desired.)
