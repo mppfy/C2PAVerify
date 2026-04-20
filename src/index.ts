@@ -121,7 +121,7 @@ app.get('/openapi.json', c => {
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
-      version: '0.1.2',
+      version: '0.1.3',
       description: c2paVerify.description,
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
@@ -129,6 +129,19 @@ app.get('/openapi.json', c => {
         'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
     },
     servers: [{ url: baseUrl }],
+    // Document-level security scheme — Payment HTTP auth per MPP spec.
+    // Free routes MUST set `security: []` to override this default;
+    // paid routes reference it via `security: [{ mppPayment: [] }]`.
+    components: {
+      securitySchemes: {
+        mppPayment: {
+          type: 'http',
+          scheme: 'Payment',
+          description:
+            'MPP (Machine Payments Protocol) — Tempo mainnet USDC.e via mppx SDK',
+        },
+      },
+    },
     'x-service-info': {
       categories: c2paVerify.categories,
       docs: {
@@ -143,13 +156,18 @@ app.get('/openapi.json', c => {
           summary: 'Verify C2PA manifest on uploaded or fetched asset',
           description:
             'Accepts multipart file upload or JSON {url}. Returns extracted C2PA manifest with trust_chain classification (valid | partial | unknown) and warnings.',
+          // Explicit auth requirement для MPPScan / agents.
+          security: [{ mppPayment: [] }],
           'x-payment-info': {
+            // MPPScan expects `price` (not `amount`) as primary budget hint.
+            // Keep `amount` as alias for backward-compat with earlier clients.
+            price: amountBaseUnits,
             amount: amountBaseUnits,
             currency,
             description: `C2PA verification (${c2paVerify.id})`,
             intent: 'charge',
             method: 'tempo',
-            authMode: 'required',
+            protocols: ['mpp'],
           },
           requestBody: {
             content: {
@@ -182,19 +200,21 @@ app.get('/openapi.json', c => {
           },
         },
       },
+      // Free routes: `security: []` (empty) explicitly overrides any
+      // document-level default и signals "no auth needed" per OpenAPI 3.1.
+      // MPPScan interprets presence of `x-payment-info` as "paid route" —
+      // so free routes MUST NOT include that object at all.
       '/health': {
         get: {
           summary: 'Service health check',
-          // authMode: 'none' explicitly marks endpoint as free. MPPScan warns
-          // otherwise ("missing auth mode declaration") forcing agents to guess.
-          'x-payment-info': { authMode: 'none' },
+          security: [],
           responses: { '200': { description: 'Service is healthy' } },
         },
       },
       '/llms.txt': {
         get: {
           summary: 'Agent-readable service spec',
-          'x-payment-info': { authMode: 'none' },
+          security: [],
           responses: {
             '200': { description: 'Plain-text spec for LLM consumption' },
           },
@@ -203,7 +223,7 @@ app.get('/openapi.json', c => {
       '/openapi.json': {
         get: {
           summary: 'MPP discovery document (this file)',
-          'x-payment-info': { authMode: 'none' },
+          security: [],
           responses: {
             '200': { description: 'OpenAPI 3.1 document with x-payment-info' },
           },
@@ -212,7 +232,7 @@ app.get('/openapi.json', c => {
       '/': {
         get: {
           summary: 'Service metadata (JSON)',
-          'x-payment-info': { authMode: 'none' },
+          security: [],
           responses: {
             '200': { description: 'Service id, name, endpoints, price' },
           },
