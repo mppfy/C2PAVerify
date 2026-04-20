@@ -7,13 +7,15 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "echo 'Use deploy:staging or deploy:prod. Top-level deploy disabled — it overwrites the production Worker with dev config (same script name + custom domains carry over).' && exit 1",
     "deploy:staging": "wrangler deploy --env staging",
+    "deploy:prod": "wrangler deploy --env production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "wrangler d1 migrations apply c2pa-verify --local",
-    "db:migrate:staging": "wrangler d1 migrations apply c2pa-verify --remote --env staging"
+    "db:migrate": "wrangler d1 migrations apply c2pa-verify-staging --local",
+    "db:migrate:staging": "wrangler d1 migrations apply c2pa-verify-staging --remote --env staging",
+    "db:migrate:prod": "wrangler d1 migrations apply c2pa-verify-prod --remote --env production"
   },
   "dependencies": {
     "@contentauth/c2pa-wasm": "^0.5.0",
