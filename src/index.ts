@@ -114,14 +114,31 @@ app.get('/openapi.json', c => {
     : '0x20c0000000000000000000000000000000000000'; // testnet pathUSD
   // Convert "0.01" → "10000" base units (6 decimals TIP-20).
   const amountBaseUnits = Math.round(parseFloat(c2paVerify.price.amount) * 1_000_000).toString();
+  // MPPScan expects `price` as decimal-formatted USD string with 6 digits
+  // of fractional precision (e.g. "0.010000" for $0.01, "2.000000" for $2.00).
+  // Anything else is displayed as-is: "10000" renders as $10,000.00.
+  const priceUsdDecimal = parseFloat(c2paVerify.price.amount).toFixed(6);
   const host = new URL(c.req.url).host;
   const baseUrl = `https://${host}`;
+
+  // Shape copied from a working registered service (AgentMail):
+  //   free route →  x-payment-info: { protocols:['mpp'], pricingMode:'fixed', price:'0' }
+  //   paid route →  x-payment-info: { ..., price, currency, method, intent, protocols, pricingMode }
+  // MPPScan classifies purely by `x-payment-info.price` — '0' means free
+  // even though an x-payment-info object is present. The earlier "authMode"
+  // hint in MPPScan's warning text was misleading; none of the registered
+  // services use it.
+  const freePayment = {
+    protocols: ['mpp'],
+    pricingMode: 'fixed',
+    price: '0',
+  };
 
   return c.json({
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
-      version: '0.1.3',
+      version: '0.1.4',
       description: c2paVerify.description,
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
@@ -129,19 +146,6 @@ app.get('/openapi.json', c => {
         'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
     },
     servers: [{ url: baseUrl }],
-    // Document-level security scheme — Payment HTTP auth per MPP spec.
-    // Free routes MUST set `security: []` to override this default;
-    // paid routes reference it via `security: [{ mppPayment: [] }]`.
-    components: {
-      securitySchemes: {
-        mppPayment: {
-          type: 'http',
-          scheme: 'Payment',
-          description:
-            'MPP (Machine Payments Protocol) — Tempo mainnet USDC.e via mppx SDK',
-        },
-      },
-    },
     'x-service-info': {
       categories: c2paVerify.categories,
       docs: {
@@ -156,18 +160,18 @@ app.get('/openapi.json', c => {
           summary: 'Verify C2PA manifest on uploaded or fetched asset',
           description:
             'Accepts multipart file upload or JSON {url}. Returns extracted C2PA manifest with trust_chain classification (valid | partial | unknown) and warnings.',
-          // Explicit auth requirement для MPPScan / agents.
-          security: [{ mppPayment: [] }],
           'x-payment-info': {
-            // MPPScan expects `price` (not `amount`) as primary budget hint.
-            // Keep `amount` as alias for backward-compat with earlier clients.
-            price: amountBaseUnits,
+            protocols: ['mpp'],
+            pricingMode: 'fixed',
+            // Decimal-formatted USD string (6 fractional digits).
+            // MPPScan renders this directly as $price.
+            price: priceUsdDecimal,
+            // Base-unit fields for mppx SDK / 402 challenge compatibility.
             amount: amountBaseUnits,
             currency,
-            description: `C2PA verification (${c2paVerify.id})`,
-            intent: 'charge',
             method: 'tempo',
-            protocols: ['mpp'],
+            intent: 'charge',
+            description: `C2PA verification (${c2paVerify.id})`,
           },
           requestBody: {
             content: {
@@ -200,21 +204,17 @@ app.get('/openapi.json', c => {
           },
         },
       },
-      // Free routes: `security: []` (empty) explicitly overrides any
-      // document-level default и signals "no auth needed" per OpenAPI 3.1.
-      // MPPScan interprets presence of `x-payment-info` as "paid route" —
-      // so free routes MUST NOT include that object at all.
       '/health': {
         get: {
           summary: 'Service health check',
-          security: [],
+          'x-payment-info': freePayment,
           responses: { '200': { description: 'Service is healthy' } },
         },
       },
       '/llms.txt': {
         get: {
           summary: 'Agent-readable service spec',
-          security: [],
+          'x-payment-info': freePayment,
           responses: {
             '200': { description: 'Plain-text spec for LLM consumption' },
           },
@@ -223,7 +223,7 @@ app.get('/openapi.json', c => {
       '/openapi.json': {
         get: {
           summary: 'MPP discovery document (this file)',
-          security: [],
+          'x-payment-info': freePayment,
           responses: {
             '200': { description: 'OpenAPI 3.1 document with x-payment-info' },
           },
@@ -232,7 +232,7 @@ app.get('/openapi.json', c => {
       '/': {
         get: {
           summary: 'Service metadata (JSON)',
-          security: [],
+          'x-payment-info': freePayment,
           responses: {
             '200': { description: 'Service id, name, endpoints, price' },
           },
