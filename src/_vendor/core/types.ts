@@ -28,6 +28,17 @@ export interface ServiceEnv {
   // Global config
   ENVIRONMENT: 'development' | 'staging' | 'production';
   PAYMENT_MODE: 'dev' | 'mpp' | 'x402' | 'multi'; // Controls which adapter(s) active
+
+  // Observability — все optional, если DSN/token не задан, модуль no-op'ит.
+  SENTRY_DSN?: string;           // https://<key>@<host>/<project> — errors → Sentry
+  SENTRY_RELEASE?: string;       // git sha, populated by CI
+  AXIOM_TOKEN?: string;          // Bearer ingest token (Axiom api.axiom.co)
+  AXIOM_DATASET?: string;        // target dataset name (default: c2pa-verify)
+  AXIOM_ORG_ID?: string;         // optional — omits header if unset
+
+  // Facilitator resilience — см. src/_vendor/adapters/x402-facilitator.ts
+  X402_FACILITATOR_FALLBACK_URL?: string; // fallback если primary timeouts
+  X402_FACILITATOR_TIMEOUT_MS?: string;   // строка (env vars), parse в runtime. default 5000
 }
 
 export type ServiceStatus = 'active' | 'deprecated' | 'disabled';

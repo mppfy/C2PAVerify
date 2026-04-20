@@ -64,6 +64,21 @@ export interface X402AdapterConfig {
   facilitatorUrl?: string;
 
   /**
+   * Fallback facilitator URL if primary fails/timeouts. Defaults to
+   * `https://x402.org/facilitator` (no-auth public). Disable fallback by
+   * explicitly passing the same URL as `facilitatorUrl`.
+   */
+  facilitatorFallbackUrl?: string;
+
+  /**
+   * Per-call facilitator timeout in ms. Single value applies to verify
+   * (tight, so agent MPP fallback kicks in faster) — settle uses a wider
+   * internal default. Override for stress-testing / degraded upstream
+   * experiments.
+   */
+  facilitatorTimeoutMs?: number;
+
+  /**
    * Optional asset contract override. Falls back to USDC for the chosen
    * network (base → USDC_BASE_MAINNET; base-sepolia → USDC_BASE_SEPOLIA).
    * Use for non-USDC experiments.
@@ -129,6 +144,12 @@ export function buildX402Requirements(params: {
 export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
   const facilitator: X402FacilitatorClient = createFacilitatorClient({
     url: config.facilitatorUrl ?? 'https://x402.org/facilitator',
+    ...(config.facilitatorFallbackUrl
+      ? { fallbackUrl: config.facilitatorFallbackUrl }
+      : {}),
+    ...(config.facilitatorTimeoutMs !== undefined
+      ? { timeoutMs: config.facilitatorTimeoutMs }
+      : {}),
   });
 
   const assetAddress =
