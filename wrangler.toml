@@ -77,6 +77,20 @@ routes = [
 ENVIRONMENT = "production"
 PAYMENT_MODE = "mpp"
 
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "c2pa-verify-prod"
+database_id = "94961938-afb2-4d72-b264-c0956316223a"
+migrations_dir = "migrations"
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "f592002e5b1b44a299ab4fec2901a1fc"
+
+[[env.production.analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "c2pa_verify_calls_prod"
+
 # Secrets (set via `wrangler secret put NAME --env <env>`):
 #   MPP_RECIPIENT_ADDRESS   — Tempo wallet 0x...
 #   MPP_SECRET_KEY          — 32-byte base64 (challenge signing)
