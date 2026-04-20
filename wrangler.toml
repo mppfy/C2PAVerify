@@ -91,11 +91,13 @@ routes = [
 [env.production.vars]
 ENVIRONMENT = "production"
 # Shadow rollout plan (see docs/v2-decide-api.md и commit message для x402):
-#  Stage 1 (now): PAYMENT_MODE="mpp", discovery advertises MPP only.
-#  Stage 2 (after staging soak): set PAYMENT_MODE="multi", DEFAULT_PROTOCOL="mpp".
-#    MPP clients keep working unchanged. x402 clients (X-PAYMENT header) get served.
+#  Stage 1 (shipped): PAYMENT_MODE="mpp", discovery advertises MPP only.
+#  Stage 2 (CURRENT): PAYMENT_MODE="multi", DEFAULT_PROTOCOL="mpp".
+#    MPP clients keep working unchanged. x402 clients (X-PAYMENT header)
+#    get served on Base mainnet. Flip DEFAULT_PROTOCOL="x402" after 7 days
+#    of clean traffic + if customer/agent signal appears.
 #  Stage 3 (+7 days, no incidents): DEFAULT_PROTOCOL="x402". MPP stays as fallback.
-PAYMENT_MODE = "mpp"
+PAYMENT_MODE = "multi"
 DEFAULT_PROTOCOL = "mpp"
 X402_NETWORK = "base"
 X402_FACILITATOR_URL = "https://x402.org/facilitator"
