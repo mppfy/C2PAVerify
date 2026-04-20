@@ -18,6 +18,8 @@ import type { PaymentAdapter, PaymentRequirement } from './_vendor/adapters/type
 import { wrapHandler } from './_vendor/core/observability';
 import { c2paVerify } from './service';
 import { renderLanding } from './landing';
+import { captureException } from './observability/sentry';
+import { sendLog } from './observability/axiom';
 
 const app = new Hono<{ Bindings: ServiceEnv }>();
 
@@ -77,10 +79,21 @@ function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
         .filter(s => s.length > 0)
     : [];
 
+  // Parse timeout override если задан. Invalid строка → ignore.
+  const timeoutMs = env.X402_FACILITATOR_TIMEOUT_MS
+    ? Number.parseInt(env.X402_FACILITATOR_TIMEOUT_MS, 10)
+    : Number.NaN;
+
   return createX402Adapter({
     recipientAddress: recipient,
     network,
     ...(env.X402_FACILITATOR_URL ? { facilitatorUrl: env.X402_FACILITATOR_URL } : {}),
+    ...(env.X402_FACILITATOR_FALLBACK_URL
+      ? { facilitatorFallbackUrl: env.X402_FACILITATOR_FALLBACK_URL }
+      : {}),
+    ...(Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? { facilitatorTimeoutMs: timeoutMs }
+      : {}),
     ...(env.X402_ASSET_ADDRESS ? { assetAddress: env.X402_ASSET_ADDRESS } : {}),
     ...(seedPayers.length > 0 ? { seedPayers } : {}),
   });
@@ -421,8 +434,28 @@ app.post('/verify', async c => {
       response = await c2paVerify.handler(c);
     } catch (err) {
       console.error('[c2pa-verify] handler error:', err);
+      const sentryId = captureException(err, {
+        dsn: c.env.SENTRY_DSN,
+        release: c.env.SENTRY_RELEASE,
+        environment: c.env.ENVIRONMENT,
+        executionCtx: c.executionCtx,
+        request: c.req.raw,
+        serverName: `c2pa-verify@${c.env.ENVIRONMENT}`,
+      });
+      sendLog(c.env, c.executionCtx, {
+        level: 'error',
+        service: c2paVerify.id,
+        event: 'handler_error',
+        error_name: err instanceof Error ? err.name : 'unknown',
+        error_message: err instanceof Error ? err.message : String(err),
+        sentry_id: sentryId ?? undefined,
+      });
       return c.json(
-        { error: 'service handler error', service: c2paVerify.id },
+        {
+          error: 'service handler error',
+          service: c2paVerify.id,
+          ...(sentryId ? { trace_id: sentryId } : {}),
+        },
         500,
       );
     }
@@ -461,7 +494,32 @@ app.notFound(c => {
 
 app.onError((err, c) => {
   console.error('[c2pa-verify] unhandled error:', err);
-  return c.json({ error: 'internal server error', service: c2paVerify.id }, 500);
+  const sentryId = captureException(err, {
+    dsn: c.env.SENTRY_DSN,
+    release: c.env.SENTRY_RELEASE,
+    environment: c.env.ENVIRONMENT,
+    executionCtx: c.executionCtx,
+    request: c.req.raw,
+    serverName: `c2pa-verify@${c.env.ENVIRONMENT}`,
+  });
+  sendLog(c.env, c.executionCtx, {
+    level: 'error',
+    service: c2paVerify.id,
+    event: 'unhandled_error',
+    error_name: err instanceof Error ? err.name : 'unknown',
+    error_message: err instanceof Error ? err.message : String(err),
+    path: new URL(c.req.url).pathname,
+    method: c.req.method,
+    sentry_id: sentryId ?? undefined,
+  });
+  return c.json(
+    {
+      error: 'internal server error',
+      service: c2paVerify.id,
+      ...(sentryId ? { trace_id: sentryId } : {}),
+    },
+    500,
+  );
 });
 
 export default app;

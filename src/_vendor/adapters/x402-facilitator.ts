@@ -19,10 +19,18 @@
  * - Future x402Version bumps handled by upgrading the package, not us.
  * - Workers bundle impact measured ≈ 218 KB gzipped (acceptable).
  *
- * We wrap it to:
- * - Add circuit-breaker semantics (fail-closed on facilitator outage).
- * - Narrow to our PaymentAdapter contract (so multi.ts can dispatch).
- * - Expose a single `verifyAndSettle` helper to simplify the happy path.
+ * Resilience layer (added 2026-04-20 after infra-audit):
+ * - Timeout (`timeoutMs`, default 5000) via Promise.race. SDK useFacilitator
+ *   не выставляет AbortController, так что через race — единственный чистый
+ *   способ из Workers.
+ * - Fallback URL (`fallbackUrl`). Если primary падает/timeout — пробуем
+ *   secondary один раз. PayAI facilitator (primary) периодически
+ *   деградирует; x402.org/facilitator (free) = надёжный fallback без
+ *   catalog auto-list, но verify/settle продолжают работать. Выбор «хорошо
+ *   принимаем оплату, но не попадаем в PayAI Bazaar для этих запросов»
+ *   предпочтительнее чем «отказываем агенту в оплате».
+ * - Fail-closed: если оба facilitator'а недоступны — возвращаем
+ *   `isValid=false` / `success=false`, чтобы caller сгенерировал 402 заново.
  */
 
 import { useFacilitator } from 'x402/verify';
@@ -50,43 +58,137 @@ export interface CreateFacilitatorClientOptions {
   /** Facilitator URL — must be https://...-prefixed. */
   url: string;
   /**
+   * Optional secondary facilitator — used when primary times out or throws.
+   * Defaults to `https://x402.org/facilitator` (no-auth public fallback).
+   */
+  fallbackUrl?: string;
+  /**
+   * Per-call timeout in ms. Default 5000 (verify) / 20000 (settle — on-chain).
+   * Keep `verify` tight: if facilitator is slow, agent's MPP retry finishes
+   * faster than x402 and customer gets served via dual-protocol fallback.
+   */
+  timeoutMs?: number;
+  /**
    * Optional auth headers provider. Only needed for CDP facilitator.
    * For public x402.org/facilitator, leave undefined.
    */
   createAuthHeaders?: FacilitatorConfig['createAuthHeaders'];
 }
 
+const DEFAULT_VERIFY_TIMEOUT_MS = 5000;
+// Settlement is on-chain (Base ~2s block, but RPC occasionally slow) —
+// шире, чтобы не зарезать успешные расчёты.
+const DEFAULT_SETTLE_TIMEOUT_MS = 20000;
+const DEFAULT_FALLBACK_URL = 'https://x402.org/facilitator';
+
+function buildSdkClient(
+  url: string,
+  createAuthHeaders?: FacilitatorConfig['createAuthHeaders'],
+): ReturnType<typeof useFacilitator> {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    throw new Error(
+      `[x402-facilitator] Invalid URL: ${url} — must start with http(s)://`,
+    );
+  }
+  const config: FacilitatorConfig = {
+    url: url as `${string}://${string}`,
+    ...(createAuthHeaders ? { createAuthHeaders } : {}),
+  };
+  return useFacilitator(config);
+}
+
 /**
- * Create a facilitator client. Safe to call per-request — construction
- * is cheap (no network I/O, just SDK object init).
+ * Run a promise against a timeout. Rejects with `TimeoutError` if exceeded.
+ * Используем вместо AbortController потому что SDK не exposing signal.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`${label} exceeded ${ms}ms`);
+      err.name = 'TimeoutError';
+      reject(err);
+    }, ms);
+    p.then(
+      v => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      e => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
+ * Create a facilitator client with timeout + single fallback. Safe to call
+ * per-request — construction is cheap (no network I/O, just SDK object init).
  */
 export function createFacilitatorClient(
   options: CreateFacilitatorClientOptions,
 ): X402FacilitatorClient {
-  // SDK type requires template-literal URL; runtime check via Zod happens
-  // inside useFacilitator, but we enforce at call site for clarity.
-  if (!options.url.startsWith('http://') && !options.url.startsWith('https://')) {
-    throw new Error(
-      `[x402-facilitator] Invalid URL: ${options.url} — must start with http(s)://`,
+  const primaryUrl = options.url;
+  const fallbackUrl = options.fallbackUrl ?? DEFAULT_FALLBACK_URL;
+  const useFallback = fallbackUrl && fallbackUrl !== primaryUrl;
+
+  const primary = buildSdkClient(primaryUrl, options.createAuthHeaders);
+  // Fallback всегда no-auth (public x402.org). Если потребуется auth на
+  // fallback — добавить отдельный createAuthHeadersFallback option.
+  const secondary = useFallback ? buildSdkClient(fallbackUrl) : null;
+
+  const verifyTimeout = options.timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
+  const settleTimeout = options.timeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
+
+  async function tryVerify(
+    client: ReturnType<typeof useFacilitator>,
+    url: string,
+    payload: PaymentPayload,
+    requirements: PaymentRequirements,
+  ): Promise<VerifyResponse> {
+    return withTimeout(
+      client.verify(payload, requirements),
+      verifyTimeout,
+      `[x402-facilitator ${url}] verify`,
     );
   }
 
-  const config: FacilitatorConfig = {
-    url: options.url as `${string}://${string}`,
-    ...(options.createAuthHeaders ? { createAuthHeaders: options.createAuthHeaders } : {}),
-  };
-
-  const client = useFacilitator(config);
+  async function trySettle(
+    client: ReturnType<typeof useFacilitator>,
+    url: string,
+    payload: PaymentPayload,
+    requirements: PaymentRequirements,
+  ): Promise<SettleResponse> {
+    return withTimeout(
+      client.settle(payload, requirements),
+      settleTimeout,
+      `[x402-facilitator ${url}] settle`,
+    );
+  }
 
   return {
-    url: options.url,
+    url: primaryUrl,
     async verify(payload, requirements) {
       try {
-        return await client.verify(payload, requirements);
+        return await tryVerify(primary, primaryUrl, payload, requirements);
       } catch (err) {
+        console.error(`[x402-facilitator] primary verify failed (${primaryUrl}):`, err);
+        if (secondary) {
+          try {
+            const res = await tryVerify(secondary, fallbackUrl, payload, requirements);
+            console.warn(
+              `[x402-facilitator] verify succeeded on fallback (${fallbackUrl})`,
+            );
+            return res;
+          } catch (fbErr) {
+            console.error(
+              `[x402-facilitator] fallback verify also failed (${fallbackUrl}):`,
+              fbErr,
+            );
+          }
+        }
         // Fail-closed: any facilitator error → treat as invalid payment.
         // Caller creates 402 challenge, agent retries.
-        console.error('[x402-facilitator] verify error:', err);
         return {
           isValid: false,
           invalidReason: 'facilitator_unavailable',
@@ -96,9 +198,23 @@ export function createFacilitatorClient(
     },
     async settle(payload, requirements) {
       try {
-        return await client.settle(payload, requirements);
+        return await trySettle(primary, primaryUrl, payload, requirements);
       } catch (err) {
-        console.error('[x402-facilitator] settle error:', err);
+        console.error(`[x402-facilitator] primary settle failed (${primaryUrl}):`, err);
+        if (secondary) {
+          try {
+            const res = await trySettle(secondary, fallbackUrl, payload, requirements);
+            console.warn(
+              `[x402-facilitator] settle succeeded on fallback (${fallbackUrl})`,
+            );
+            return res;
+          } catch (fbErr) {
+            console.error(
+              `[x402-facilitator] fallback settle also failed (${fallbackUrl}):`,
+              fbErr,
+            );
+          }
+        }
         return {
           success: false,
           errorReason: 'facilitator_unavailable',
