@@ -144,13 +144,13 @@ footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 <p style="margin-top: 20px; color: var(--dim); font-size: 14px;">
   What agent-payable API is missing from your stack?
-  Ping <a href="https://x.com/mppfy_net">@mppfy_net</a> or open an
+  Ping <a href="https://twitter.com/mppfy">@mppfy</a> or open an
   issue on <a href="https://github.com/mppfy">GitHub</a>.
 </p>
 
 <footer>
   <a href="https://github.com/mppfy">GitHub</a>
-  <a href="https://x.com/mppfy_net">X / Twitter</a>
+  <a href="https://twitter.com/mppfy">X / Twitter</a>
   <a href="https://c2pa.mppfy.com/llms.txt">llms.txt</a>
   <span style="float: right;">MIT</span>
 </footer>

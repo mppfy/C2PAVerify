@@ -65,6 +65,9 @@ DEFAULT_PROTOCOL = "mpp"
 # X402_RECIPIENT_ADDRESS falls back to MPP_RECIPIENT_ADDRESS when unset.
 X402_NETWORK = "base-sepolia"
 X402_FACILITATOR_URL = "https://x402.org/facilitator"
+# Axiom structured logs (Free/Personal tier — 500 GB/mo). AXIOM_TOKEN = secret.
+AXIOM_DATASET = "c2pa-verify"
+AXIOM_ORG_ID = "mppfy-r2a9"
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -117,6 +120,9 @@ X402_FACILITATOR_URL = "https://facilitator.payai.network"
 # триггерит auto-list в PayAI Bazaar. verify() пометит metadata.source="seed"
 # для фильтрации при анализе органического трафика.
 X402_SEED_PAYERS = "0x30A4E38Fc66e87F8280A74b15485603aC7145568"
+# Axiom structured logs (Free/Personal tier — 500 GB/mo). AXIOM_TOKEN = secret.
+AXIOM_DATASET = "c2pa-verify"
+AXIOM_ORG_ID = "mppfy-r2a9"
 
 [[env.production.d1_databases]]
 binding = "DB"
