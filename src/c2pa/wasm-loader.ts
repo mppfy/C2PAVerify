@@ -17,6 +17,7 @@
 import wasmModule from '@contentauth/c2pa-wasm/c2pa.wasm';
 import initC2pa, * as c2pa from '@contentauth/c2pa-wasm';
 import { installFileReaderSyncPolyfill } from './filereader-polyfill';
+import { buildTrustSettingsJson } from './trust-config';
 
 let initialized = false;
 let initPromise: Promise<typeof c2pa> | null = null;
@@ -24,16 +25,30 @@ let initPromise: Promise<typeof c2pa> | null = null;
 /**
  * One-time initialization of c2pa-wasm.
  * Idempotent — multiple concurrent calls share the same init promise.
+ *
+ * Init sequence:
+ *   1. installFileReaderSyncPolyfill() — ДО WASM init, чтобы FileReaderSync был
+ *      найден wasm-bindgen при setup imports.
+ *   2. initC2pa(wasmModule) — instantiate WASM binding.
+ *   3. loadSettings(trustJson) — применить CAI trust list (anchors + allowed + EKU).
+ *      Without этого signing certs returned как "untrusted" (trust_chain: 'partial').
  */
 export async function ensureC2paReady(): Promise<typeof c2pa> {
   if (initialized) return c2pa;
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    // Install polyfill BEFORE wasm init so FileReaderSync is present when
-    // wasm-bindgen imports are wired up.
     installFileReaderSyncPolyfill();
     await initC2pa({ module_or_path: wasmModule as WebAssembly.Module });
+    try {
+      c2pa.loadSettings(buildTrustSettingsJson());
+    } catch (err) {
+      // loadSettings failure = trust list invalid OR schema drift. Fail-safe:
+      // log и продолжаем без trust anchors (trust_chain вернётся 'partial' вместо
+      // полного crash сервиса). Alerts via logs; W4+ — replace with hard fail.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[c2pa] loadSettings failed — continuing without trust list:', msg);
+    }
     initialized = true;
     return c2pa;
   })();

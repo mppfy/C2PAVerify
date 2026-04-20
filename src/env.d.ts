@@ -12,3 +12,13 @@ declare module '@contentauth/c2pa-wasm/c2pa.wasm' {
   const module: WebAssembly.Module;
   export default module;
 }
+
+// Text-mode imports for CAI trust artifacts (wrangler [[rules]] type = "Text").
+declare module '*.pem' {
+  const text: string;
+  export default text;
+}
+declare module '*.cfg' {
+  const text: string;
+  export default text;
+}

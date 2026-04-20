@@ -11,6 +11,12 @@ type = "CompiledWasm"
 globs = ["**/*.wasm"]
 fallthrough = true
 
+# CAI trust list artifacts embedded as text modules — see src/c2pa/trust/.
+[[rules]]
+type = "Text"
+globs = ["**/*.pem", "**/*.cfg"]
+fallthrough = true
+
 # Default (local dev) bindings — override per env below.
 # Local dev reuses staging D1/KV по умолчанию (safe — dev mode adapter no-op'ит payments).
 [vars]
