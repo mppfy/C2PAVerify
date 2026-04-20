@@ -205,6 +205,7 @@ curl -v -X POST http://localhost:8787/verify \
 - **llms.txt:** [`c2pa.mppfy.com/llms.txt`](https://c2pa.mppfy.com/llms.txt) — short prose spec for LLM-driven clients.
 - **PayAI Bazaar:** auto-listed on first real x402 payment through prod.
 - **MPPScan:** listed via MPP discovery.
+- **MCP server:** [`mcp-server/`](./mcp-server) — `@mppfy/c2pa-verify-mcp` exposes `verify_c2pa_manifest` as an MCP tool for Claude Desktop / Cline / Cursor. Agent pays $0.01 via user-provided Base wallet transparently.
 
 ---
 
