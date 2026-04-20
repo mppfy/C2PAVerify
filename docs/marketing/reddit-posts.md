@@ -113,6 +113,6 @@ Open to feedback on the API shape, classification taxonomy (`valid | partial | u
 - **Order matters:** r/LocalLLaMA first (most friendly to crypto-payment-for-API angles), then r/AgenticAI, r/MachineLearning last (most skeptical, come with proof).
 - **Check subreddit rules** for "self-promotion ratio" — r/MachineLearning has a `[Project]` flair requirement.
 - **Wait to post** until:
-  1. Seed payment went through (so PayAI Bazaar listing exists to link).
+  1. Seed payment tx settled on-chain (BaseScan link as proof-of-life).
   2. GitHub metadata + README are live (users will land on repo first).
 - **Respond to every top-level comment in the first 2 hours.** Reddit ranking depends on engagement velocity.

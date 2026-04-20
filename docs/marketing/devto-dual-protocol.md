@@ -127,7 +127,7 @@ Any agent SDK can pick its protocol without out-of-band knowledge. Plus there's 
 
 1. **Interface-first payment.** Protocol details belong in adapters, not handlers. The `c2pa-verify` handler is 20 lines and doesn't know USDC exists.
 2. **Async settlement is a real shape of this problem.** If your `attachReceipt` is sync, you either (a) haven't settled yet, (b) have a race, or (c) block the request. Optional `settle()` is the cleanest out.
-3. **Tag source for demand-signal hygiene.** Running our own seed payment to populate the PayAI Bazaar listing would pollute "organic x402 traffic" metrics. We tag our seed wallet in `X402_SEED_PAYERS` env; settle() records `source=seed` vs `source=organic` in observability.
+3. **Tag source for demand-signal hygiene.** Running our own seed payment to bootstrap x402 traffic would pollute "organic demand" metrics. We tag our seed wallet in `X402_SEED_PAYERS` env; settle() records `source=seed` vs `source=organic` in observability. First seed payment: [tx 0xb6c70324…](https://basescan.org/tx/0xb6c70324c605bdf9172805472c45970e2954eb27e5857701467e72f397fe17c6).
 4. **Detection must fall through on malformed input.** First draft used a `string` header parse; we'd have silently forced anyone sending `x-payment-protocol: ""` down the x402 path. Zod enum `safeParse` fixes it.
 
 ---
@@ -135,8 +135,9 @@ Any agent SDK can pick its protocol without out-of-band knowledge. Plus there's 
 ## What's next
 
 - Flip stage 3 after 7 days.
-- Add [CDP facilitator](https://docs.cdp.coinbase.com/) as a second Bazaar catalog once PayAI shows organic demand.
-- Enrich `outputSchema.input` on our x402 PaymentRequirements so Bazaar listings show "what params to send" to agents browsing the catalog.
+- Add [CDP facilitator](https://docs.cdp.coinbase.com/) as a second facilitator once PayAI shows organic demand.
+- Enrich `outputSchema.input` on our x402 PaymentRequirements so agent SDKs can auto-discover endpoint parameters.
+- Apply to the [PayAI ecosystem catalog](https://payai.network/ecosystem) once we see 10+ organic payments.
 
 Full roadmap + deferred work: [`docs/x402-roadmap.md`](https://github.com/mppfy/C2PAVerify/blob/main/docs/x402-roadmap.md).
 

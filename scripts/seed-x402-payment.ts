@@ -170,7 +170,7 @@ async function main() {
     console.log('[seed] body (truncated):');
     console.log(JSON.stringify(body, null, 2).slice(0, 800));
     console.log('[seed] ✓ x402 settlement completed on Base mainnet.');
-    console.log('[seed] Check PayAI Bazaar in 5-10 min: https://bazaar.payai.network/');
+    console.log('[seed] Verify tx on BaseScan: https://basescan.org/tx/' + (paidRes.headers.get('x-payment-tx-hash') ?? ''));
   } else {
     const errBody = await paidRes.text();
     console.error('[seed] ✗ non-200 after payment. Body:');

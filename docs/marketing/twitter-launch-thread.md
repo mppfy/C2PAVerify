@@ -65,7 +65,7 @@ Response shape:
 
 - Cloudflare Workers, region-less
 - `c2pa-rs` compiled to WASM (~1.9 MB gzipped in the bundle)
-- Verify + settle via PayAI facilitator (auto-lists in their Bazaar)
+- Verify + settle via PayAI facilitator on Base mainnet
 - Discovery at `/openapi.json` + `/llms.txt`
 
 Source: github.com/mppfy/C2PAVerify (MIT)
@@ -94,6 +94,6 @@ Feedback: replies or GitHub issues welcome.
 ## Notes for posting
 
 - Record a 15-second terminal GIF showing the 402 → pay → 200 flow. Use `asciinema` or `terminalizer`. Attach to Post 3.
-- Before posting, confirm seed payment already went through (so Bazaar listing is live when people check).
+- Before posting, confirm seed payment tx is settled on Base (`basescan.org/tx/…`).
 - Coinbase x402 team retweets x402 launches — tag them in Post 1.
 - Avoid emoji-heavy copy; agent-focused audience prefers signal/noise tight.
