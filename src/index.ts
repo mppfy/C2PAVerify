@@ -67,11 +67,21 @@ function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
   const network: 'base' | 'base-sepolia' =
     env.X402_NETWORK ?? (env.ENVIRONMENT === 'production' ? 'base' : 'base-sepolia');
 
+  // Parse seed-payer list (comma-separated 0x... addresses). Empty/undefined
+  // → empty list → no addresses tagged as seed (all traffic = organic).
+  // See docs/x402-roadmap.md for rationale.
+  const seedPayers = env.X402_SEED_PAYERS
+    ? env.X402_SEED_PAYERS.split(',')
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+    : [];
+
   return createX402Adapter({
     recipientAddress: recipient,
     network,
     ...(env.X402_FACILITATOR_URL ? { facilitatorUrl: env.X402_FACILITATOR_URL } : {}),
     ...(env.X402_ASSET_ADDRESS ? { assetAddress: env.X402_ASSET_ADDRESS } : {}),
+    ...(seedPayers.length > 0 ? { seedPayers } : {}),
   });
 }
 
@@ -404,7 +414,23 @@ app.post('/verify', async c => {
       );
     }
 
-    return adapter.attachReceipt(response, verification);
+    // Attach sync receipt markers (protocol/network/payer headers).
+    let withReceipt = adapter.attachReceipt(response, verification);
+
+    // Finalize async settlement (x402: facilitator.settle() → on-chain
+    // USDC transfer → X-PAYMENT-RESPONSE header). For MPP this is a no-op.
+    // Only runs on 2xx handler outcomes — see adapter.settle() guard.
+    if (adapter.settle) {
+      try {
+        withReceipt = await adapter.settle(c.req.raw, withReceipt, verification);
+      } catch (err) {
+        // settle() already logs internally and returns response-as-is on
+        // failure; this catch is a safety net for unexpected throws.
+        console.error('[c2pa-verify] settle step threw:', err);
+      }
+    }
+
+    return withReceipt;
   });
 });
 

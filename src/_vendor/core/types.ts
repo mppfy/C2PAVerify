@@ -22,6 +22,7 @@ export interface ServiceEnv {
   X402_NETWORK?: 'base' | 'base-sepolia'; // Defaults to base-sepolia in staging, base in production
   X402_FACILITATOR_URL?: string; // Defaults to https://x402.org/facilitator
   X402_ASSET_ADDRESS?: string; // USDC contract — defaults per network
+  X402_SEED_PAYERS?: string; // Comma-separated 0x... payer addresses whose payments are tagged `source=seed` in observability (excluded from organic-demand metrics). Empty = all traffic organic.
   DEFAULT_PROTOCOL?: 'mpp' | 'x402'; // Fallback when client sends no hints (default: 'mpp' during shadow rollout)
 
   // Global config
