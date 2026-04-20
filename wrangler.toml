@@ -4,6 +4,13 @@ compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 account_id = "592f29d8cf4b0b3492112569d9499309"  # mppfy.project@gmail.com
 
+# WASM modules — c2pa-rs verification engine (7.5 MB raw).
+# Workers bundler компилирует .wasm → WebAssembly.Module, доступный через default import.
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true
+
 # Default (local dev) bindings — override per env below.
 # Local dev reuses staging D1/KV по умолчанию (safe — dev mode adapter no-op'ит payments).
 [vars]

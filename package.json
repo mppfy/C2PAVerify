@@ -10,17 +10,22 @@
     "deploy": "wrangler deploy",
     "deploy:staging": "wrangler deploy --env staging",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:migrate": "wrangler d1 migrations apply c2pa-verify --local",
     "db:migrate:staging": "wrangler d1 migrations apply c2pa-verify --remote --env staging"
   },
   "dependencies": {
+    "@contentauth/c2pa-wasm": "^0.5.0",
     "hono": "^4.6.0",
     "mppx": "latest",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.3",
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^5.3.0",
+    "vitest": "^4.1.4",
     "wrangler": "^4.0.0"
   }
 }
