@@ -1,0 +1,163 @@
+name: Deploy
+
+on:
+  # Staging: auto-deploy on any commit to main (tip of main == staging).
+  # Production: on SemVer tag push (explicit `git tag v0.1.1 && git push --tags`).
+  # NB: YAML doesn't allow two separate `push:` keys — combined triggers
+  # belong under the same key. Job-level `if:` picks the right target.
+  push:
+    branches: [main]
+    tags:
+      - 'v*.*.*'
+
+  # Manual override — useful for hotfix redeploy without a fresh commit.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deploy target'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+# Don't let a newer main push interrupt a running production tag deploy —
+# scope concurrency by event so staging and prod don't fight each other.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ─── Preflight: typecheck + tests must pass before any deploy.
+  # Duplicates ci.yml but keeps deploy self-contained: deploy triggered by a
+  # tag push doesn't automatically re-run ci.yml against the tag ref.
+  verify:
+    name: typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  # ─── Staging: every push to main.
+  deploy-staging:
+    name: deploy → c2pa-staging.mppfy.com
+    needs: verify
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: https://c2pa-staging.mppfy.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Apply D1 migrations (staging)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply c2pa-verify-staging --remote --env staging
+
+      - name: Deploy Worker (staging)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --env staging
+
+      - name: Post-deploy smoke — /health
+        # Hard fail the deploy job if the Worker doesn't serve 200 — that
+        # makes the bad version visible in the Actions UI instead of
+        # silently shipping.
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://c2pa-staging.mppfy.com/health || true)
+            if [ "$code" = "200" ]; then
+              echo "health ok (attempt $i)"
+              exit 0
+            fi
+            echo "health not ready yet (attempt $i, code=$code) — sleeping 3s"
+            sleep 3
+          done
+          echo "staging /health never returned 200"
+          exit 1
+
+  # ─── Production: only on tag push (v0.1.0, v0.2.0, etc).
+  # `environment: production` lets us gate with a required reviewer
+  # (Settings → Environments → production → Required reviewers).
+  deploy-production:
+    name: deploy → c2pa.mppfy.com
+    needs: verify
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'production')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://c2pa.mppfy.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Apply D1 migrations (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply c2pa-verify-prod --remote --env production
+
+      - name: Deploy Worker (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --env production
+
+      - name: Post-deploy smoke — /health + /llms.txt
+        # Critical: if prod /health fails after a tag deploy, the previous
+        # version is still live (CF does atomic version swap) — but we want
+        # the deploy job RED so the human notices and either reverts the
+        # tag or fixes forward.
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://c2pa.mppfy.com/health || true)
+            if [ "$code" = "200" ]; then
+              echo "health ok (attempt $i)"
+              break
+            fi
+            echo "health not ready (attempt $i, code=$code) — sleeping 3s"
+            sleep 3
+            if [ "$i" = "5" ]; then
+              echo "prod /health never returned 200"
+              exit 1
+            fi
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://c2pa.mppfy.com/llms.txt || true)
+          if [ "$code" != "200" ]; then
+            echo "llms.txt returned $code — agent discoverability broken"
+            exit 1
+          fi
+          echo "prod smoke ok"
+
