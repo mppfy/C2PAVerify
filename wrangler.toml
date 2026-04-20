@@ -2,49 +2,63 @@ name = "c2pa-verify"
 main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
+account_id = "592f29d8cf4b0b3492112569d9499309"  # mppfy.project@gmail.com
 
 # Default (local dev) bindings — override per env below.
+# Local dev reuses staging D1/KV по умолчанию (safe — dev mode adapter no-op'ит payments).
 [vars]
 ENVIRONMENT = "development"
 PAYMENT_MODE = "dev"  # dev | mpp
 
-# D1 database for observability logs (service_calls).
-# Uncomment + fill IDs after running `wrangler d1 create c2pa-verify`.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "c2pa-verify"
-# database_id = "TODO-local-id"
-# migrations_dir = "migrations"
+[[d1_databases]]
+binding = "DB"
+database_name = "c2pa-verify-staging"
+database_id = "3334a7dc-b09e-4238-9358-69528e538178"
+migrations_dir = "migrations"
 
-# KV namespace for caching verification results (optional).
-# [[kv_namespaces]]
-# binding = "CACHE"
-# id = "TODO-local-id"
+[[kv_namespaces]]
+binding = "CACHE"
+id = "8bb1c1f02273438c87be4b4649bfb0a1"
 
-# Analytics Engine for metrics.
-# [[analytics_engine_datasets]]
-# binding = "METRICS"
-# dataset = "c2pa_verify_calls"
+[[analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "c2pa_verify_calls"
 
 # ─── STAGING ────────────────────────────────────────────────
 [env.staging]
 name = "c2pa-verify-staging"
-route = { pattern = "c2pa-staging.mppfy.com/*", zone_name = "mppfy.com" }
+# custom_domain=true — wrangler auto-creates DNS record on first deploy.
+# Alternative (old): route = { pattern = "c2pa-staging.mppfy.com/*", zone_name = "mppfy.com" }
+# требует manual DNS record — у нас его не было, fix: перешли на custom_domain.
+routes = [
+  { pattern = "c2pa-staging.mppfy.com", custom_domain = true }
+]
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
-PAYMENT_MODE = "dev"  # flip to "mpp" after Tempo wallet wired + secrets set
+PAYMENT_MODE = "mpp"  # staging uses real MPP protocol (dev mode только для local wrangler dev)
 
-# [[env.staging.d1_databases]]
-# binding = "DB"
-# database_name = "c2pa-verify-staging"
-# database_id = "TODO-staging-id"
-# migrations_dir = "migrations"
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "c2pa-verify-staging"
+database_id = "3334a7dc-b09e-4238-9358-69528e538178"
+migrations_dir = "migrations"
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "8bb1c1f02273438c87be4b4649bfb0a1"
+
+[[env.staging.analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "c2pa_verify_calls_staging"
 
 # ─── PRODUCTION ─────────────────────────────────────────────
+# Resources создадим отдельно при production deploy (W3-W4).
 [env.production]
 name = "c2pa-verify"
-route = { pattern = "c2pa.mppfy.com/*", zone_name = "mppfy.com" }
+routes = [
+  { pattern = "c2pa.mppfy.com", custom_domain = true }
+]
 
 [env.production.vars]
 ENVIRONMENT = "production"
