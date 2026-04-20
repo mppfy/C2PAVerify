@@ -121,8 +121,12 @@ app.get('/openapi.json', c => {
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
-      version: '0.1.0',
+      version: '0.1.2',
       description: c2paVerify.description,
+      // Short agent-readable hint rendered by MPPScan и other aggregators.
+      // Keep it terse — target audience is automated clients, not humans.
+      'x-guidance':
+        'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
     },
     servers: [{ url: baseUrl }],
     'x-service-info': {
@@ -145,6 +149,7 @@ app.get('/openapi.json', c => {
             description: `C2PA verification (${c2paVerify.id})`,
             intent: 'charge',
             method: 'tempo',
+            authMode: 'required',
           },
           requestBody: {
             content: {
@@ -180,18 +185,60 @@ app.get('/openapi.json', c => {
       '/health': {
         get: {
           summary: 'Service health check',
+          // authMode: 'none' explicitly marks endpoint as free. MPPScan warns
+          // otherwise ("missing auth mode declaration") forcing agents to guess.
+          'x-payment-info': { authMode: 'none' },
           responses: { '200': { description: 'Service is healthy' } },
         },
       },
       '/llms.txt': {
         get: {
           summary: 'Agent-readable service spec',
+          'x-payment-info': { authMode: 'none' },
           responses: {
             '200': { description: 'Plain-text spec for LLM consumption' },
           },
         },
       },
+      '/openapi.json': {
+        get: {
+          summary: 'MPP discovery document (this file)',
+          'x-payment-info': { authMode: 'none' },
+          responses: {
+            '200': { description: 'OpenAPI 3.1 document with x-payment-info' },
+          },
+        },
+      },
+      '/': {
+        get: {
+          summary: 'Service metadata (JSON)',
+          'x-payment-info': { authMode: 'none' },
+          responses: {
+            '200': { description: 'Service id, name, endpoints, price' },
+          },
+        },
+      },
     },
+  });
+});
+
+// ── Favicon ─────────────────────────────────────────────────
+// Inline SVG — zero-size deploy, MPPScan и browsers happy.
+// Design: C2PA diamond (content credentials icon) stylized.
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#0f172a"/><path d="M32 10 L54 32 L32 54 L10 32 Z" fill="none" stroke="#22d3ee" stroke-width="3"/><text x="32" y="40" font-family="monospace" font-size="18" font-weight="bold" text-anchor="middle" fill="#22d3ee">C2</text></svg>`;
+
+app.get('/favicon.svg', c => {
+  return c.body(FAVICON_SVG, 200, {
+    'content-type': 'image/svg+xml',
+    'cache-control': 'public, max-age=86400',
+  });
+});
+
+app.get('/favicon.ico', c => {
+  // Browsers fall back to SVG if served as image/svg+xml via .ico path.
+  return c.body(FAVICON_SVG, 200, {
+    'content-type': 'image/svg+xml',
+    'cache-control': 'public, max-age=86400',
   });
 });
 
