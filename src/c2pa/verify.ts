@@ -22,12 +22,16 @@ export interface VerifyResult {
     claim_generator?: string;
     signed_by?: string;
     signed_at?: string;
-    assertions?: Array<{ label: string; [k: string]: unknown }>;
-    [k: string]: unknown;
+    assertions?: Array<{ label: string }>; // labels only — full assertion payloads могут содержать PII (EXIF GPS, etc.)
+    title?: string;
+    format?: string;
   };
   trust_chain?: 'valid' | 'partial' | 'unknown';
+  /**
+   * Stable machine-readable validation codes from c2pa-rs (e.g. 'signingCredential.untrusted').
+   * Не exposes raw explanation strings — тем могут содержать internal paths / OIDs.
+   */
   warnings?: string[];
-  raw_manifest_store?: unknown;
 }
 
 export interface VerifyError {
@@ -139,9 +143,12 @@ export async function verifyC2PA(blob: Blob): Promise<VerifyOutcome> {
     );
     const trustWarnings = validationStatuses.filter(v => trustOnlyCode.test(v.code));
 
+    // Exposing only stable machine codes (e.g. "signingCredential.untrusted"),
+    // не raw explanation — v.explanation может содержать OID строки, internal
+    // paths или debug info из c2pa-rs.
     const warnings = [
-      ...failures.map(v => v.explanation ?? v.code),
-      ...trustWarnings.map(v => v.explanation ?? v.code),
+      ...failures.map(v => v.code),
+      ...trustWarnings.map(v => v.code),
     ];
 
     const verified = failures.length === 0;
@@ -156,6 +163,15 @@ export async function verifyC2PA(blob: Blob): Promise<VerifyOutcome> {
       | { issuer?: string; time?: string }
       | undefined;
 
+    // Strip assertion payloads — оставляем только labels. Полный assertion содержит
+    // потенциально чувствительные данные (EXIF GPS, thumbnails с metadata).
+    // Consumer who needs full payload должен fetch upstream asset сам.
+    const assertionsList = Array.isArray(active?.assertions)
+      ? (active.assertions as Array<{ label?: unknown }>)
+          .filter(a => typeof a.label === 'string')
+          .map(a => ({ label: a.label as string }))
+      : [];
+
     return {
       ok: true,
       result: {
@@ -164,15 +180,12 @@ export async function verifyC2PA(blob: Blob): Promise<VerifyOutcome> {
           claim_generator: active?.claim_generator as string | undefined,
           signed_by: signatureInfo?.issuer,
           signed_at: signatureInfo?.time,
-          assertions: (active?.assertions as
-            | Array<{ label: string; [k: string]: unknown }>
-            | undefined) ?? [],
+          assertions: assertionsList,
           title: active?.title as string | undefined,
           format: active?.format as string | undefined,
         },
         trust_chain: trustChain,
         warnings,
-        raw_manifest_store: manifestStore,
       },
     };
   } finally {
