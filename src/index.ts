@@ -138,7 +138,7 @@ app.get('/openapi.json', c => {
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
-      version: '0.1.6',
+      version: '0.1.7',
       description: c2paVerify.description,
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
@@ -262,43 +262,12 @@ app.get('/favicon.ico', c => {
   });
 });
 
-// ── /verify discovery probe (GET / HEAD / OPTIONS) ──────────
-// MPPScan (и другие aggregators) probe'ят paid endpoints с GET чтобы
-// сверить заявленную в openapi цену с live 402 challenge. Default Hono
-// 404 на non-POST методы ломает проверку — фиксированная цена в spec
-// тогда "may not match live server" (MPPScan WARN).
-//
-// Возвращаем тот же 402 + WWW-Authenticate challenge что и POST,
-// без parsing request body. Методы GET/HEAD/OPTIONS are safe (RFC 9110) —
-// они не должны выполнять работу, поэтому просто signal'им payment
-// requirement и клиент переключится на POST с правильным credential.
-app.on(['GET', 'HEAD', 'OPTIONS'], '/verify', async c => {
-  if (c2paVerify.status === 'disabled') {
-    return c.json({ error: 'service disabled', id: c2paVerify.id }, 410);
-  }
-  const adapter = getAdapter(c.env);
-  const requirement: PaymentRequirement = {
-    amount: c2paVerify.price.amount,
-    currency: c2paVerify.price.currency,
-    recipient: c.env.MPP_RECIPIENT_ADDRESS,
-    network: 'tempo',
-    serviceId: c2paVerify.id,
-  };
-  // adapter.create402 has two code paths (см. mpp.ts):
-  //   fast:     returns mppx-generated Response with signed challenge
-  //             AND WWW-Authenticate header — requires prior verify() call
-  //             (populates WeakMap pending<Request,MppxChargeResult>).
-  //   fallback: plain JSON 402 with только x-payment-* headers — NO
-  //             WWW-Authenticate. MPPScan flags это как spec/live mismatch.
-  //
-  // На probe'ах (unauthenticated GET/HEAD/OPTIONS) verify() возвращает null,
-  // но mppx.charge() всё равно генерирует signed challenge в pending.
-  // Тогда create402() идёт по fast path и отдаёт WWW-Authenticate.
-  await adapter.verify(c.req.raw, requirement);
-  return adapter.create402(requirement, c.req.raw);
-});
-
 // ── Paid endpoint: /verify ──────────────────────────────────
+// NOTE: GET/HEAD/OPTIONS handlers были добавлены в v0.1.6 чтобы MPPScan
+// мог сверить заявленную в openapi цену через probe — но это ломало
+// schema validation (MPPScan классифицировал каждый метод как отдельный
+// paid endpoint и требовал requestBody schema, которой нет у GET).
+// Оставляем POST-only; MPPScan fallback — читать цену из /openapi.json.
 app.post('/verify', async c => {
   if (c2paVerify.status === 'disabled') {
     return c.json({ error: 'service disabled', id: c2paVerify.id }, 410);
