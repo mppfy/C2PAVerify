@@ -107,6 +107,10 @@ X402_NETWORK = "base"
 # "https://x402.org/facilitator" (verify/settle работает, catalog нет).
 # CDP facilitator (требует API key) добавим когда/если PayAI даст сигнал.
 X402_FACILITATOR_URL = "https://facilitator.payai.network"
+# Seed payer — наш собственный кошелёк для bootstrap-платежа, который
+# триггерит auto-list в PayAI Bazaar. verify() пометит metadata.source="seed"
+# для фильтрации при анализе органического трафика.
+X402_SEED_PAYERS = "0x30A4E38Fc66e87F8280A74b15485603aC7145568"
 
 [[env.production.d1_databases]]
 binding = "DB"
