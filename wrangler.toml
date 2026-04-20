@@ -85,7 +85,13 @@ dataset = "c2pa_verify_calls_staging"
 [env.production]
 name = "c2pa-verify"
 routes = [
-  { pattern = "c2pa.mppfy.com", custom_domain = true }
+  { pattern = "c2pa.mppfy.com", custom_domain = true },
+  # Apex + www serve the marketing landing (src/landing.ts). Worker
+  # branches on Host header in the GET / handler. Keep both zones in
+  # Cloudflare DNS pointing to a proxied (orange cloud) AAAA record so
+  # the Worker route matches.
+  { pattern = "mppfy.com", custom_domain = true },
+  { pattern = "www.mppfy.com", custom_domain = true }
 ]
 
 [env.production.vars]

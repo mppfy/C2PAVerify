@@ -8,7 +8,9 @@
 
 | Что | Ссылка |
 |---|---|
+| **Landing (root)** | https://mppfy.com |
 | Live endpoint | https://c2pa.mppfy.com/verify |
+| GitHub org | https://github.com/mppfy |
 | GitHub repo | https://github.com/mppfy/C2PAVerify |
 | OpenAPI discovery | https://c2pa.mppfy.com/openapi.json |
 | llms.txt | https://c2pa.mppfy.com/llms.txt |
@@ -63,11 +65,11 @@ curl -s https://c2pa.mppfy.com/openapi.json | head -50
 ### Post 1 — hook (ЗАПИНИ после публикации)
 
 ```
-Launched: an agent-native C2PA manifest verification API. Pay per call — no accounts, no subscriptions, no API keys.
+Launched mppfy — pay-per-call HTTP APIs for AI agents.
 
-$0.01 USDC per verification, dual-protocol: x402 on Base (@base) or MPP on Tempo.
+First product live: C2PA manifest verification. $0.01 USDC per call, dual-protocol (x402 on @base or MPP on Tempo). No accounts, no API keys.
 
-Live: c2pa.mppfy.com 👇
+mppfy.com 👇
 ```
 
 Теги: `@coinbasedev @base @CAI_Developers @PayAINetwork`
