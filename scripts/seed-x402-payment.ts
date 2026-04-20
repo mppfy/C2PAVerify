@@ -62,20 +62,42 @@ function die(msg: string): never {
 async function main() {
   if (!PK && !DRY_RUN) die('SEED_PK env var required (set DRY_RUN=1 to skip signing)');
 
+  // Two input modes:
+  //   1. TEST_IMAGE_PATH=/local/file.jpg → multipart upload (bypasses SSRF guard)
+  //   2. TEST_IMAGE_URL=https://...      → JSON { url } (default, needs SSRF-safe URL)
+  // Multipart preferred for seed run — eliminates upstream-redirect flake.
+  const imagePath = process.env.TEST_IMAGE_PATH;
+  const useMultipart = Boolean(imagePath);
+
+  let imageBytes: Uint8Array | null = null;
+  if (useMultipart) {
+    const fs = await import('node:fs/promises');
+    imageBytes = new Uint8Array(await fs.readFile(imagePath!));
+  }
+
   console.log('[seed] target:', TARGET_URL);
-  console.log('[seed] image: ', TEST_IMAGE_URL);
+  console.log('[seed] source:', useMultipart ? `file ${imagePath} (${imageBytes!.byteLength} bytes)` : `url ${TEST_IMAGE_URL}`);
   console.log('[seed] mode:  ', DRY_RUN ? 'dry-run (no payment)' : 'REAL payment on Base mainnet');
 
+  const buildRequestInit = (extraHeaders: Record<string, string> = {}): RequestInit => {
+    if (useMultipart) {
+      const form = new FormData();
+      form.set('file', new Blob([imageBytes!], { type: 'image/jpeg' }), 'seed.jpg');
+      return {
+        method: 'POST',
+        headers: { 'x-payment-protocol': 'x402', ...extraHeaders },
+        body: form,
+      };
+    }
+    return {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-payment-protocol': 'x402', ...extraHeaders },
+      body: JSON.stringify({ url: TEST_IMAGE_URL }),
+    };
+  };
+
   // Step 1 — trigger 402 challenge.
-  const challengeRes = await fetch(TARGET_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      // Force x402 even though default protocol on prod is MPP (stage 2).
-      'x-payment-protocol': 'x402',
-    },
-    body: JSON.stringify({ url: TEST_IMAGE_URL }),
-  });
+  const challengeRes = await fetch(TARGET_URL, buildRequestInit());
 
   if (challengeRes.status !== 402) {
     const body = await challengeRes.text();
@@ -126,15 +148,7 @@ async function main() {
 
   // Step 3 — retry with X-PAYMENT header.
   console.log('[seed] replaying request with X-PAYMENT...');
-  const paidRes = await fetch(TARGET_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-payment-protocol': 'x402',
-      'x-payment': paymentHeader,
-    },
-    body: JSON.stringify({ url: TEST_IMAGE_URL }),
-  });
+  const paidRes = await fetch(TARGET_URL, buildRequestInit({ 'x-payment': paymentHeader }));
 
   console.log('[seed] response status:', paidRes.status);
   console.log('[seed] response headers of interest:');
