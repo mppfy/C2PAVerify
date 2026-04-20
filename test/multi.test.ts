@@ -31,6 +31,13 @@ function makeStub(name: 'mpp' | 'x402'): PaymentAdapter {
         headers: { 'x-routed-via': name },
       }),
     ),
+    settle: vi.fn().mockImplementation(
+      async (_req: Request, resp: Response) =>
+        new Response(resp.body, {
+          status: resp.status,
+          headers: { 'x-settled-by': name },
+        }),
+    ),
   };
 }
 
@@ -140,6 +147,47 @@ describe('createMultiProtocolAdapter', () => {
     expect(x402.attachReceipt).toHaveBeenCalledOnce();
     expect(mpp.attachReceipt).not.toHaveBeenCalled();
     expect(resp.headers.get('x-routed-via')).toBe('x402');
+  });
+
+  it('settle routes to verification.protocol adapter', async () => {
+    const mpp = makeStub('mpp');
+    const x402 = makeStub('x402');
+    const adapter = createMultiProtocolAdapter({
+      adapters: { mpp, x402 },
+      detection: { defaultProtocol: 'mpp' },
+    });
+
+    const request = new Request('https://example.com/verify');
+    const verified: PaymentVerification = {
+      verified: true,
+      protocol: 'x402',
+      amount: '0.01',
+    };
+    const out = await adapter.settle!(request, new Response('ok'), verified);
+
+    expect(x402.settle).toHaveBeenCalledOnce();
+    expect(mpp.settle).not.toHaveBeenCalled();
+    expect(out.headers.get('x-settled-by')).toBe('x402');
+  });
+
+  it('settle is a no-op when child adapter does not implement it', async () => {
+    const mpp = makeStub('mpp');
+    const x402 = makeStub('x402');
+    // Simulate MPP adapter WITHOUT settle() (optional field).
+    delete (mpp as { settle?: unknown }).settle;
+    const adapter = createMultiProtocolAdapter({
+      adapters: { mpp, x402 },
+      detection: { defaultProtocol: 'mpp' },
+    });
+
+    const original = new Response('ok');
+    const out = await adapter.settle!(new Request('https://example.com/verify'), original, {
+      verified: true,
+      protocol: 'mpp',
+      amount: '0.01',
+    });
+    expect(out).toBe(original);
+    expect(x402.settle).not.toHaveBeenCalled();
   });
 
   it('attachReceipt gracefully handles unknown protocol', () => {

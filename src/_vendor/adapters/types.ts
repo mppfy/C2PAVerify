@@ -108,7 +108,7 @@ export interface PaymentAdapter {
   /**
    * Прикрепить receipt к successful response.
    * Agent использует receipt для verification что payment был applied.
-   * 
+   *
    * Для MPP: добавляет X-Payment-Receipt header
    * Для x402: добавляет specific x402 receipt format
    */
@@ -116,6 +116,29 @@ export interface PaymentAdapter {
     response: Response,
     verification: PaymentVerification
   ): Response;
+
+  /**
+   * Финализировать платёж (async post-verify step).
+   *
+   * Вызывается после того как handler вернул 2xx response и attachReceipt()
+   * уже добавил sync headers. Используется для protocols, которые требуют
+   * отдельного on-chain settlement call.
+   *
+   *   MPP: не использует (receipt уже в attachReceipt) — адаптер может не
+   *        реализовывать этот метод, либо вернуть response без изменений.
+   *   x402: вызывает facilitator.settle() и добавляет `X-PAYMENT-RESPONSE` +
+   *        `X-PAYMENT-TX-HASH`. Если settle падает, возвращает response
+   *        as-is (caller sees 2xx без receipt headers — это flag для client'а
+   *        повторить платёж при необходимости).
+   *
+   * Optional чтобы не ломать NoneAdapter / MPP. Multi-adapter форвардит
+   * вызов по verification.protocol.
+   */
+  settle?(
+    request: Request,
+    response: Response,
+    verification: PaymentVerification
+  ): Promise<Response>;
 }
 
 /**

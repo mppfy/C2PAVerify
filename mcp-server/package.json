@@ -1,0 +1,42 @@
+{
+  "name": "@mppfy/c2pa-verify-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing c2pa.mppfy.com/verify as an MCP tool. Pays via x402 (Base USDC) with a user-provided wallet.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "c2pa-verify-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "viem": "^2.21.0",
+    "x402": "^1.1.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.3.0"
+  },
+  "keywords": [
+    "mcp",
+    "c2pa",
+    "content-authenticity",
+    "x402",
+    "agent-tools",
+    "model-context-protocol"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

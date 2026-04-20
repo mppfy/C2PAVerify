@@ -69,6 +69,16 @@ export interface X402AdapterConfig {
    * Use for non-USDC experiments.
    */
   assetAddress?: string;
+
+  /**
+   * Payer addresses to mark as seed / self-test traffic (lowercase EVM).
+   * Settlements from these payers are still executed normally on-chain,
+   * but tagged in observability so demand-signal metrics can filter
+   * organic vs seed. Populated from env `X402_SEED_PAYERS` (comma-list).
+   *
+   * See docs/x402-roadmap.md — "seed payment" section.
+   */
+  seedPayers?: readonly string[];
 }
 
 /** Stash between verify() and attachReceipt() — see mpp.ts for rationale. */
@@ -127,6 +137,12 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
 
   const pending = new WeakMap<Request, PendingPayment>();
 
+  // Normalize seed payers to lowercase — EVM addresses are case-insensitive
+  // but comparisons need to be uniform. Empty set = no seed tagging.
+  const seedPayers = new Set(
+    (config.seedPayers ?? []).map(a => a.toLowerCase()),
+  );
+
   return {
     name: 'x402',
 
@@ -174,6 +190,12 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
       // Stash for attachReceipt → settle().
       pending.set(request, { decoded, requirements });
 
+      // Tag source for demand-signal hygiene. `seed` = our own test
+      // payments (excluded from organic metrics). `organic` = anyone else.
+      const payerLower = result.payer?.toLowerCase() ?? '';
+      const source: 'seed' | 'organic' =
+        payerLower && seedPayers.has(payerLower) ? 'seed' : 'organic';
+
       return {
         verified: true,
         protocol: 'x402',
@@ -182,6 +204,7 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
         metadata: {
           network: config.network,
           scheme: 'exact',
+          source,
         },
       };
     },
@@ -217,15 +240,11 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
       response: Response,
       verification: PaymentVerification,
     ): Response {
-      // SDK settle call happens here — moves USDC on-chain.
-      // Caller (handler) must await this before committing the 200 response,
-      // so we need settlement synchronously. But attachReceipt is sync per
-      // interface. Trick: we already called facilitator.verify() in verify().
-      // Settlement will be triggered separately in wrapping handler wrapper.
-      // For now: emit protocol + payer marker headers; settlement is deferred.
-      //
-      // TODO(next iteration): rework adapter interface so attachReceipt can
-      // be async, OR add adapter.settle(request, verification) explicit step.
+      // Sync markers only — actual on-chain settlement happens in settle()
+      // below, which is async. These headers are still useful if settle()
+      // is a no-op (e.g. dev mode) or if the caller skips settle for some
+      // reason: at minimum the client learns which protocol + network
+      // served the payment.
       const headers = new Headers(response.headers);
       headers.set('x-payment-protocol', 'x402');
       headers.set('x-payment-network', config.network);
@@ -242,49 +261,67 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
         headers,
       });
     },
+
+    async settle(
+      request: Request,
+      response: Response,
+      verification: PaymentVerification,
+    ): Promise<Response> {
+      // Only act on 2xx responses — a 4xx/5xx handler outcome should NOT
+      // trigger on-chain USDC movement. Facilitator would accept it, but
+      // charging the agent for a failed call is hostile.
+      if (response.status < 200 || response.status >= 300) {
+        return response;
+      }
+
+      const stash = pending.get(request);
+      if (!stash) {
+        // verify() never stashed — either this Request isn't an x402 one,
+        // or verify() was called on a different Request instance. No-op.
+        console.warn('[x402] settle called without matching verify() stash');
+        return response;
+      }
+
+      const source = verification.metadata?.source ?? 'organic';
+
+      let settlement: SettleResponse;
+      try {
+        settlement = await facilitator.settle(stash.decoded, stash.requirements);
+      } catch (err) {
+        console.error(
+          `[x402] settle threw (source=${source}, payer=${verification.payerAddress}):`,
+          err,
+        );
+        return response;
+      }
+      if (!settlement.success) {
+        console.error(
+          `[x402] settle failed (source=${source}, payer=${verification.payerAddress}):`,
+          settlement.errorReason,
+        );
+        return response;
+      }
+
+      // Observability: one structured line per settled payment. Easy grep
+      // in CF logs (`source=seed` / `source=organic`). Analytics Engine
+      // still gets the signal via wrapHandler's verification.metadata.
+      console.log(
+        `[x402] settled source=${source} payer=${verification.payerAddress} tx=${settlement.transaction}`,
+      );
+
+      const headers = new Headers(response.headers);
+      headers.set('x-payment-response', settleResponseHeader(settlement));
+      if (settlement.transaction) {
+        headers.set('x-payment-tx-hash', settlement.transaction);
+      }
+      headers.set('x-payment-source', String(source));
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    },
   };
 }
 
-/**
- * Explicit settlement helper — call this after verify() returned verified=true
- * but before committing the 200 response. Emits X-PAYMENT-RESPONSE header.
- *
- * Separated from attachReceipt() because x402 settle is async (facilitator
- * network call) and our PaymentAdapter.attachReceipt is sync. Kept outside
- * the adapter contract to avoid breaking MPP adapter.
- */
-export async function settleX402Payment(params: {
-  adapter: PaymentAdapter;
-  facilitator: X402FacilitatorClient;
-  request: Request;
-  verification: PaymentVerification;
-  response: Response;
-  pending: WeakMap<Request, PendingPayment>;
-}): Promise<Response> {
-  if (params.verification.protocol !== 'x402') return params.response;
-  const stash = params.pending.get(params.request);
-  if (!stash) return params.response;
-
-  let settlement: SettleResponse;
-  try {
-    settlement = await params.facilitator.settle(stash.decoded, stash.requirements);
-  } catch (err) {
-    console.error('[x402] settle threw:', err);
-    return params.response;
-  }
-  if (!settlement.success) {
-    console.error('[x402] settle failed:', settlement.errorReason);
-    return params.response;
-  }
-
-  const headers = new Headers(params.response.headers);
-  headers.set('x-payment-response', settleResponseHeader(settlement));
-  if (settlement.transaction) {
-    headers.set('x-payment-tx-hash', settlement.transaction);
-  }
-  return new Response(params.response.body, {
-    status: params.response.status,
-    statusText: params.response.statusText,
-    headers,
-  });
-}

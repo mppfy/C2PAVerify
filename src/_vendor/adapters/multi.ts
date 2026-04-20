@@ -125,6 +125,20 @@ export function createMultiProtocolAdapter(
       }
       return adapter.attachReceipt(response, verification);
     },
+
+    async settle(
+      request: Request,
+      response: Response,
+      verification: PaymentVerification,
+    ): Promise<Response> {
+      const adapter = pickAdapterByProtocol(adapters, verification.protocol);
+      if (!adapter || !adapter.settle) {
+        // Protocol doesn't require async settlement (MPP) or unknown
+        // protocol slipped through verify() — return response unchanged.
+        return response;
+      }
+      return adapter.settle(request, response, verification);
+    },
   };
 }
 
