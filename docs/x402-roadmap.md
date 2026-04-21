@@ -12,53 +12,26 @@
 
 ## What's deferred (explicit not-doing-yet list)
 
-### CDP facilitator (Coinbase-operated Bazaar)
+### ~~CDP facilitator (Coinbase-operated Bazaar)~~ — SHIPPED 2026-04-21 (PR #3)
 
-**Why we want it:** second major Bazaar catalog. CDP-native agents (built with Coinbase's SDK/CDP APIs) query the CDP discovery endpoint by default, not PayAI. Not being in the CDP catalog means CDP-native agents can't find us via discovery — they'd have to know our URL out-of-band.
+**Status:** live in production alongside PayAI. Pool mode via `X402_FACILITATOR_URLS`. See `src/_vendor/adapters/x402-facilitator.ts::createFacilitatorPool` + `src/index.ts::buildFacilitatorPool`.
 
-**Why we haven't done it:**
-- Requires Coinbase Developer account + CDP API key (free but manual signup, ~10-15 min)
-- Requires ~1-2 hours of engineering:
-  - Extend `X402_FACILITATOR_URL` → `X402_FACILITATOR_URLS` (comma-separated list)
-  - Add `createAuthHeaders` support in `x402-facilitator.ts` (CDP requires JWT auth header)
-  - Sticky facilitator selection in `x402.ts` — verify() and settle() for same payment must hit same facilitator (they share server-side state per payment); store choice in `PendingPayment` WeakMap
-  - Round-robin or weighted selection policy for choosing facilitator on first hit
-  - Unit tests for pool logic (sticky selection, fallback on facilitator outage)
-  - Observability: log which facilitator handled each payment → Analytics Engine
-- Operational complexity doubles (two APIs to monitor, two failure modes, two rate-limit budgets)
+**Actual shape (differs from original sketch):**
+- `X402_FACILITATOR_URLS="url|label,url|label"` — label allows per-facilitator observability tagging
+- Pool round-robins across primaries; **sticky verify↔settle** (closure-pinned `PickedFacilitator`, not just `X402FacilitatorClient` — exposes only the two methods, prevents accidental bypass of fallback guards)
+- Pool-level fallback (single shared `x402.org`) instead of per-client internal fallback — prevents double-fallback cascade and keeps verify/settle routing coherent
+- **Settle has NO fallback** — settlement state lives on the primary that verified; cross-facilitator settle would risk double-charge or stranded payments
+- CDP auth injected via exact-hostname allowlist (not substring match — see `src/_vendor/adapters/x402-url.ts`; substring match in original sketch was a credential-exfil CVE waiting to happen)
+- HTTPS-only guard on every facilitator URL (no plaintext over-the-wire for EIP-712 signatures)
 
-**Trigger to build:**
-- PayAI gives ≥3 organic x402 payments in 30 days (demand signal confirmed; worth expanding reach), OR
-- A customer/user reports "tried to find c2pa-verify through CDP agent, couldn't" (explicit CDP demand), OR
-- Stage 3 flip (`DEFAULT_PROTOCOL="x402"`) approaches and we want maximum discoverability at cut-over
+Env vars:
+- `X402_FACILITATOR_URLS="https://facilitator.payai.network|payai,https://api.cdp.coinbase.com/platform/v2/x402|cdp"`
+- `X402_CDP_API_KEY_ID` (secret, production only)
+- `X402_CDP_API_KEY_SECRET` (secret, production only — PEM EC or base64 Ed25519)
 
-**Implementation sketch (when triggered):**
+Test coverage: 10 pool tests + 6 URL predicate tests (total 86/86 passing).
 
-```typescript
-// src/_vendor/adapters/x402-facilitator.ts — extend to support pool
-export interface FacilitatorPoolConfig {
-  primaries: Array<{
-    url: string;
-    createAuthHeaders?: FacilitatorConfig['createAuthHeaders'];
-    weight?: number; // optional traffic split
-  }>;
-  fallback?: { url: string }; // x402.org as last-resort
-}
-
-// src/_vendor/adapters/x402.ts — sticky selection
-interface PendingPayment {
-  readonly decoded: PaymentPayload;
-  readonly requirements: PaymentRequirements;
-  readonly facilitator: X402FacilitatorClient; // pinned at verify() time
-}
-```
-
-Env vars added:
-- `X402_FACILITATOR_URLS="https://facilitator.payai.network,https://api.cdp.coinbase.com/platform/v2/x402/facilitator"`
-- `X402_CDP_API_KEY_ID` (secret)
-- `X402_CDP_API_KEY_SECRET` (secret)
-
-Rollback: set back to single URL via existing `X402_FACILITATOR_URL`, redeploy. Adapter code keeps both paths.
+Rollback: drop CDP entry from `X402_FACILITATOR_URLS`, redeploy. Adapter works with N≥1 primaries.
 
 ---
 
@@ -108,7 +81,7 @@ If PayAI listing degrades without traffic (catalog TTL), accept degradation as s
 | 2026-04-20 | Ship Stage 1 (MPP-only prod) | Baseline before dual-protocol |
 | 2026-04-20 | Ship Stage 2 shadow (PAYMENT_MODE=multi, DEFAULT_PROTOCOL=mpp) | Backward-compatible; x402 opt-in |
 | 2026-04-20 | Switch prod facilitator x402.org → PayAI | x402.org has no catalog; PayAI = free Bazaar listing |
-| TBD | Sign up CDP API key + add facilitator pool | Pending first organic x402 signal |
+| 2026-04-21 | Add CDP facilitator alongside PayAI (pool mode) | PR #3. Decided NOT to wait for organic signal — the incremental eng cost is ~2 hrs, Bazaar listings are free, and having both PayAI + CDP catalogs doubles the discovery surface. `X402_FACILITATOR_URLS` = PayAI + CDP (round-robin), fallback = x402.org. Sticky verify↔settle pin + 6 URL predicate tests guard against credential-exfil on CDP substring match. |
 | TBD | Flip DEFAULT_PROTOCOL to x402 | Pending 7d clean shadow + organic traffic |
 
 ---
