@@ -540,7 +540,7 @@ User-agent: CCBot
 Allow: /
 
 # Cloudflare content-signals (blog.cloudflare.com/content-signals).
-# Directive name is singular per spec (`Content-Signal:`). Applies to the
+# Directive name is singular per spec (Content-Signal:). Applies to the
 # preceding User-agent group (here: wildcard *, scoped to all crawlers).
 # search=yes: allow traditional search indexing.
 # ai-input=yes: allow RAG / prompt-time retrieval.
