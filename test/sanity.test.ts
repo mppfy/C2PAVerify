@@ -75,7 +75,8 @@ describe('Agent-readiness discovery endpoints', () => {
     expect(text).toContain('User-agent: ClaudeBot');
     expect(text).toContain('User-agent: GPTBot');
     expect(text).toContain('Sitemap: https://c2pa-staging.mppfy.com/sitemap.xml');
-    expect(text).toMatch(/Content-Signals:/);
+    // Singular "Content-Signal:" per Cloudflare spec — scanner rejects plural.
+    expect(text).toMatch(/^Content-Signal:/m);
   });
 
   it('GET /sitemap.xml lists primary discovery URLs', async () => {

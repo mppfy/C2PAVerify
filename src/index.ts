@@ -540,10 +540,12 @@ User-agent: CCBot
 Allow: /
 
 # Cloudflare content-signals (blog.cloudflare.com/content-signals).
+# Directive name is singular per spec (`Content-Signal:`). Applies to the
+# preceding User-agent group (here: wildcard *, scoped to all crawlers).
 # search=yes: allow traditional search indexing.
 # ai-input=yes: allow RAG / prompt-time retrieval.
 # ai-train=no: public copy OK, but don't train foundation models on paid API output.
-Content-Signals: search=yes, ai-input=yes, ai-train=no
+Content-Signal: search=yes, ai-input=yes, ai-train=no
 
 Sitemap: ${baseUrl}/sitemap.xml
 `;
