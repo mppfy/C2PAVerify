@@ -2,12 +2,21 @@
  * C2PAVerify — Cloudflare Worker entry point.
  *
  * Single-service MPPFY deployment. Routes:
- *   GET  /                             — service metadata (free)
- *   GET  /llms.txt                     — agent-friendly spec (free)
- *   GET  /openapi.json                 — OpenAPI 3.1 discovery (free)
- *   GET  /.well-known/mpp-services     — RFC 8615 alias → openapi.json (free)
- *   GET  /health                       — health check (free)
- *   POST /verify                       — C2PA verification (paid, 402 if unpaid)
+ *   GET  /                                  — service metadata (free)
+ *   GET  /  [Accept: text/markdown]         — llms.txt payload (free)
+ *   GET  /llms.txt                          — agent-friendly spec (free)
+ *   GET  /openapi.json                      — OpenAPI 3.1 discovery (free)
+ *   GET  /robots.txt                        — AI bot rules + sitemap (free)
+ *   GET  /sitemap.xml                       — public URL sitemap (free)
+ *   GET  /.well-known/mpp-services          — RFC 8615 alias → openapi.json
+ *   GET  /.well-known/api-catalog           — RFC 9727 service-desc linkset
+ *   GET  /.well-known/mcp/server-card.json  — MCP server manifest (stdio)
+ *   GET  /health                            — health check (free)
+ *   POST /verify                            — C2PA verification (paid, 402)
+ *
+ * All free discovery routes return `Link` headers pointing at the canonical
+ * machine-readable spec (`/openapi.json`), so clients doing a single HEAD
+ * request can follow the service-desc rel to discovery without probing paths.
  */
 
 import { Hono } from 'hono';
@@ -106,37 +115,15 @@ function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
 // Host-based routing: one worker serves both mppfy.com apex (marketing
 // landing) and c2pa.mppfy.com (API metadata JSON). Keeps infra minimal;
 // landing HTML is cached aggressively at edge.
-app.get('/', c => {
-  const host = (c.req.header('host') ?? '').toLowerCase();
-  const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
 
-  if (isApex) {
-    return renderLanding();
-  }
-
-  // c2pa.mppfy.com (API subdomain) — return machine-readable service metadata.
-  return c.json({
-    service: c2paVerify.id,
-    name: c2paVerify.name,
-    description: c2paVerify.description,
-    categories: c2paVerify.categories,
-    price: c2paVerify.price,
-    status: c2paVerify.status,
-    endpoints: {
-      metadata: 'GET /',
-      spec: 'GET /llms.txt',
-      openapi: 'GET /openapi.json',
-      wellKnown: 'GET /.well-known/mpp-services',
-      health: 'GET /health',
-      verify: 'POST /verify',
-    },
-    mpp_protocol: 'https://mpp.dev',
-    docs: 'https://github.com/mppfy/C2PAVerify',
-  });
-});
-
-app.get('/llms.txt', c => {
-  const body = `# ${c2paVerify.name}
+/**
+ * Single source of truth for the agent-readable spec. Returned by both
+ * /llms.txt (Content-Type: text/plain) and GET / with `Accept: text/markdown`
+ * (Content-Type: text/markdown) so Markdown-content-negotiation crawlers
+ * and plain-text llms.txt readers both resolve to the same canonical text.
+ */
+function buildLlmsTxt(): string {
+  return `# ${c2paVerify.name}
 
 ${c2paVerify.description}
 
@@ -164,7 +151,71 @@ ${c2paVerify.status}
 ## Source
 https://github.com/mppfy/C2PAVerify
 `;
-  return c.text(body, 200, { 'content-type': 'text/plain; charset=utf-8' });
+}
+
+/**
+ * RFC 8288 Link header advertising machine-readable specs на homepage.
+ * Agents doing HEAD / can follow `service-desc` → OpenAPI, `alternate` →
+ * markdown/plain variants без дополнительного probing. Keeps discovery
+ * cheap (one round-trip) for crawlers like isitagentready.com.
+ */
+const DISCOVERY_LINK_HEADER = [
+  '</openapi.json>; rel="service-desc"; type="application/json"',
+  '</.well-known/mpp-services>; rel="service-desc"; type="application/json"',
+  '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"',
+  '</.well-known/mcp/server-card.json>; rel="mcp-server"; type="application/json"',
+  '</llms.txt>; rel="alternate"; type="text/plain"',
+].join(', ');
+
+app.get('/', c => {
+  const host = (c.req.header('host') ?? '').toLowerCase();
+  const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
+
+  if (isApex) {
+    return renderLanding();
+  }
+
+  // Markdown content negotiation (see cloudflare.com/fundamentals/reference/
+  // markdown-for-agents). If the caller prefers markdown, return llms.txt
+  // payload with Content-Type: text/markdown — same string, different label.
+  const accept = (c.req.header('accept') ?? '').toLowerCase();
+  if (accept.includes('text/markdown')) {
+    return c.text(buildLlmsTxt(), 200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      link: DISCOVERY_LINK_HEADER,
+    });
+  }
+
+  // c2pa.mppfy.com (API subdomain) — return machine-readable service metadata.
+  c.header('link', DISCOVERY_LINK_HEADER);
+  return c.json({
+    service: c2paVerify.id,
+    name: c2paVerify.name,
+    description: c2paVerify.description,
+    categories: c2paVerify.categories,
+    price: c2paVerify.price,
+    status: c2paVerify.status,
+    endpoints: {
+      metadata: 'GET /',
+      spec: 'GET /llms.txt',
+      openapi: 'GET /openapi.json',
+      wellKnown: 'GET /.well-known/mpp-services',
+      apiCatalog: 'GET /.well-known/api-catalog',
+      mcpServerCard: 'GET /.well-known/mcp/server-card.json',
+      robots: 'GET /robots.txt',
+      sitemap: 'GET /sitemap.xml',
+      health: 'GET /health',
+      verify: 'POST /verify',
+    },
+    mpp_protocol: 'https://mpp.dev',
+    docs: 'https://github.com/mppfy/C2PAVerify',
+  });
+});
+
+app.get('/llms.txt', c => {
+  return c.text(buildLlmsTxt(), 200, {
+    'content-type': 'text/plain; charset=utf-8',
+  });
 });
 
 app.get('/health', c => {
@@ -375,6 +426,46 @@ function buildOpenApiSpec(
           },
         },
       },
+      '/.well-known/api-catalog': {
+        get: {
+          summary: 'RFC 9727 API-catalog linkset',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': {
+              description: 'application/linkset+json pointing at service-desc, service-doc, service-meta',
+            },
+          },
+        },
+      },
+      '/.well-known/mcp/server-card.json': {
+        get: {
+          summary: 'MCP server manifest (@mppfy/c2pa-verify-mcp, stdio transport)',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': {
+              description: 'Tool catalog, transport, and installation hints for MCP hosts',
+            },
+          },
+        },
+      },
+      '/robots.txt': {
+        get: {
+          summary: 'robots.txt with AI-bot allow rules and sitemap link',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': { description: 'text/plain robots.txt' },
+          },
+        },
+      },
+      '/sitemap.xml': {
+        get: {
+          summary: 'sitemap.xml listing public discovery URLs',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': { description: 'application/xml sitemap' },
+          },
+        },
+      },
       '/': {
         get: {
           summary: 'Service metadata (JSON)',
@@ -396,6 +487,251 @@ app.get('/openapi.json', c => c.json(buildOpenApiSpec(c.env, c.req.url)));
 app.get('/.well-known/mpp-services', c =>
   c.json(buildOpenApiSpec(c.env, c.req.url)),
 );
+
+// ── Agent-readiness discovery ───────────────────────────────
+//
+// The checks below surface our service to crawlers following the emerging
+// "agent-ready" conventions (tested by cloudflare's isitagentready.com).
+// All are read-only, cheap, and deterministic — no runtime deps, no secrets.
+
+/**
+ * robots.txt with explicit AI-bot allow rules + Content-Signals directive
+ * per Cloudflare's content-signals convention (blog.cloudflare.com/content-signals).
+ * We intentionally allow all major AI crawlers: this is a paid API — agents
+ * benefit from reading /openapi.json and /llms.txt to pick it up.
+ *
+ * Apex domain (mppfy.com landing) gets a narrower robots.txt served from the
+ * same handler; host is checked to avoid leaking subdomain-specific sitemap.
+ */
+app.get('/robots.txt', c => {
+  // Prefer URL host to Host header — vitest-pool-workers does not populate
+  // a Host header on SELF.fetch, but c.req.url is always complete.
+  const host = new URL(c.req.url).host.toLowerCase();
+  const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
+  const baseUrl = isApex ? 'https://mppfy.com' : `https://${host}`;
+
+  const body = `# ${isApex ? 'MPPFY' : 'C2PAVerify'} — robots.txt
+# Generated dynamically; edit src/index.ts to change.
+
+User-agent: *
+Allow: /
+
+# Explicit allow for major AI crawlers — content here is a paid API
+# (POST /verify). Marketing copy and discovery endpoints are fine to index.
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Meta-ExternalAgent
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+# Cloudflare content-signals (blog.cloudflare.com/content-signals).
+# search=yes: allow traditional search indexing.
+# ai-input=yes: allow RAG / prompt-time retrieval.
+# ai-train=no: public copy OK, but don't train foundation models on paid API output.
+Content-Signals: search=yes, ai-input=yes, ai-train=no
+
+Sitemap: ${baseUrl}/sitemap.xml
+`;
+  return c.text(body, 200, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'public, max-age=3600',
+  });
+});
+
+/**
+ * sitemap.xml listing publicly discoverable URLs. `lastmod` uses deploy
+ * timestamp so crawlers refetch after each release; `priority` values follow
+ * sitemaps.org conventions (1.0 = homepage, 0.9 = primary spec, etc.).
+ */
+app.get('/sitemap.xml', c => {
+  const host = new URL(c.req.url).host.toLowerCase();
+  const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
+  const baseUrl = isApex ? 'https://mppfy.com' : `https://${host}`;
+  const today = new Date().toISOString().split('T')[0];
+
+  const urls = isApex
+    ? [{ loc: baseUrl, priority: '1.0', changefreq: 'monthly' }]
+    : [
+        { loc: baseUrl, priority: '1.0', changefreq: 'weekly' },
+        { loc: `${baseUrl}/openapi.json`, priority: '0.9', changefreq: 'weekly' },
+        { loc: `${baseUrl}/llms.txt`, priority: '0.9', changefreq: 'weekly' },
+        {
+          loc: `${baseUrl}/.well-known/mcp/server-card.json`,
+          priority: '0.8',
+          changefreq: 'weekly',
+        },
+      ];
+
+  const xml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    urls
+      .map(
+        u =>
+          `  <url>\n    <loc>${u.loc}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`,
+      )
+      .join('\n') +
+    `\n</urlset>\n`;
+
+  return c.body(xml, 200, {
+    'content-type': 'application/xml; charset=utf-8',
+    'cache-control': 'public, max-age=3600',
+  });
+});
+
+/**
+ * RFC 9727 API-catalog linkset. Points crawlers от single well-known path to
+ * the authoritative OpenAPI document and its well-known alias. Small,
+ * static, content-type application/linkset+json per the RFC.
+ */
+app.get('/.well-known/api-catalog', c => {
+  const host = new URL(c.req.url).host;
+  const baseUrl = `https://${host}`;
+
+  const linkset = {
+    linkset: [
+      {
+        anchor: baseUrl,
+        'service-desc': [
+          {
+            href: `${baseUrl}/openapi.json`,
+            type: 'application/json',
+            title: 'OpenAPI 3.1 specification',
+          },
+          {
+            href: `${baseUrl}/.well-known/mpp-services`,
+            type: 'application/json',
+            title: 'OpenAPI alias (RFC 8615 well-known)',
+          },
+        ],
+        'service-doc': [
+          {
+            href: `${baseUrl}/llms.txt`,
+            type: 'text/plain',
+            title: 'Agent-readable service description',
+          },
+        ],
+        'service-meta': [
+          {
+            href: `${baseUrl}/.well-known/mcp/server-card.json`,
+            type: 'application/json',
+            title: 'MCP server manifest',
+          },
+        ],
+      },
+    ],
+  };
+
+  return c.json(linkset, 200, {
+    'content-type': 'application/linkset+json',
+    'cache-control': 'public, max-age=3600',
+  });
+});
+
+/**
+ * MCP Server Card. Describes the @mppfy/c2pa-verify-mcp stdio server
+ * (see mcp-server/src/index.ts) so MCP-aware hosts (Claude Desktop, Cursor,
+ * Continue, Cline) can register the tool without manual JSON hand-editing.
+ *
+ * `transport: stdio` — the server runs locally via `npx @mppfy/c2pa-verify-mcp`
+ * and pays calls through x402 on Base using a user-provided wallet
+ * (C2PA_VERIFY_WALLET_PK env). HTTP-transport MCP is a future milestone.
+ */
+app.get('/.well-known/mcp/server-card.json', c => {
+  const card = {
+    schemaVersion: '2024-11-05',
+    name: 'c2pa-verify',
+    title: 'C2PAVerify',
+    version: '0.1.0',
+    description:
+      'MCP server exposing C2PA content-provenance verification as a tool. ' +
+      'Agents call `verify_c2pa_manifest(url)` and receive manifest details + ' +
+      'trust_chain classification. Each call costs ~$0.01 USDC, paid automatically ' +
+      'via x402 on Base mainnet using a user-provided wallet.',
+    vendor: {
+      name: 'MPPFY',
+      url: 'https://mppfy.com',
+    },
+    homepage: 'https://c2pa.mppfy.com',
+    documentation: 'https://github.com/mppfy/C2PAVerify',
+    license: 'MIT',
+    // Installation — stdio transport launched by the MCP host.
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@mppfy/c2pa-verify-mcp'],
+      env: {
+        C2PA_VERIFY_WALLET_PK: {
+          description:
+            '0x-prefixed EVM private key for a Base mainnet wallet with ≥$0.02 USDC. Required.',
+          required: true,
+          secret: true,
+        },
+        C2PA_VERIFY_MAX_ATOMIC: {
+          description:
+            'Spend cap per call in atomic USDC units. Default 20000 = $0.02.',
+          required: false,
+          default: '20000',
+        },
+      },
+    },
+    // Payment-aware authentication hint — not a standard MCP field yet, но
+    // signals к discovery-aware clients что server requires funded wallet.
+    authentication: {
+      type: 'payment',
+      protocols: ['x402'],
+      network: 'base',
+      asset: 'USDC',
+      pricePerCall: '0.01',
+      upstream: 'https://c2pa.mppfy.com/verify',
+    },
+    capabilities: {
+      tools: {},
+    },
+    tools: [
+      {
+        name: 'verify_c2pa_manifest',
+        description:
+          'Verify the C2PA content-provenance manifest on a publicly-hosted ' +
+          'image/video/audio file. Returns manifest details (claim_generator, ' +
+          'signed_by, assertions) and trust_chain classification ' +
+          '(valid | partial | unknown). Costs ~$0.01 USDC per call.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              format: 'uri',
+              description: 'HTTPS URL of the media file to verify.',
+            },
+          },
+          required: ['url'],
+        },
+      },
+    ],
+    categories: ['media', 'provenance', 'compliance'],
+    keywords: ['c2pa', 'content-credentials', 'deepfake', 'ai-generated', 'x402'],
+  };
+
+  return c.json(card, 200, {
+    'cache-control': 'public, max-age=3600',
+  });
+});
 
 // ── Favicon ─────────────────────────────────────────────────
 // Inline SVG — zero-size deploy, MPPScan и browsers happy.

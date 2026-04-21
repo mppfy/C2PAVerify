@@ -63,3 +63,94 @@ describe('Worker framework sanity', () => {
     expect(wellKnownBody).toEqual(openapiBody);
   });
 });
+
+describe('Agent-readiness discovery endpoints', () => {
+  it('GET /robots.txt returns AI bot rules + sitemap', async () => {
+    const res = await SELF.fetch('https://c2pa-staging.mppfy.com/robots.txt');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/plain/);
+    const text = await res.text();
+    // Contract: named AI crawlers explicitly allowed, sitemap linked,
+    // content-signals present for Cloudflare aggregators.
+    expect(text).toContain('User-agent: ClaudeBot');
+    expect(text).toContain('User-agent: GPTBot');
+    expect(text).toContain('Sitemap: https://c2pa-staging.mppfy.com/sitemap.xml');
+    expect(text).toMatch(/Content-Signals:/);
+  });
+
+  it('GET /sitemap.xml lists primary discovery URLs', async () => {
+    const res = await SELF.fetch('https://c2pa-staging.mppfy.com/sitemap.xml');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/application\/xml/);
+    const xml = await res.text();
+    expect(xml).toContain('<urlset');
+    expect(xml).toContain('<loc>https://c2pa-staging.mppfy.com</loc>');
+    expect(xml).toContain('<loc>https://c2pa-staging.mppfy.com/openapi.json</loc>');
+    expect(xml).toContain('<loc>https://c2pa-staging.mppfy.com/.well-known/mcp/server-card.json</loc>');
+  });
+
+  it('GET /.well-known/api-catalog returns RFC 9727 linkset', async () => {
+    const res = await SELF.fetch(
+      'https://c2pa-staging.mppfy.com/.well-known/api-catalog',
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/linkset+json');
+    const body = (await res.json()) as {
+      linkset: Array<{
+        anchor: string;
+        'service-desc': Array<{ href: string }>;
+      }>;
+    };
+    expect(body.linkset).toHaveLength(1);
+    expect(body.linkset[0]!.anchor).toBe('https://c2pa-staging.mppfy.com');
+    // First service-desc link must point at the canonical OpenAPI.
+    expect(body.linkset[0]!['service-desc'][0]!.href).toBe(
+      'https://c2pa-staging.mppfy.com/openapi.json',
+    );
+  });
+
+  it('GET /.well-known/mcp/server-card.json exposes verify_c2pa_manifest tool', async () => {
+    const res = await SELF.fetch(
+      'https://c2pa-staging.mppfy.com/.well-known/mcp/server-card.json',
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      name: string;
+      transport: { type: string; command: string };
+      tools: Array<{ name: string; inputSchema: { required: string[] } }>;
+      authentication: { type: string; protocols: string[] };
+    };
+    expect(body.name).toBe('c2pa-verify');
+    expect(body.transport.type).toBe('stdio');
+    expect(body.transport.command).toBe('npx');
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]!.name).toBe('verify_c2pa_manifest');
+    expect(body.tools[0]!.inputSchema.required).toEqual(['url']);
+    expect(body.authentication.protocols).toContain('x402');
+  });
+
+  it('GET / emits Link header with service-desc discovery hints', async () => {
+    const res = await SELF.fetch('https://c2pa-staging.mppfy.com/');
+    expect(res.status).toBe(200);
+    const link = res.headers.get('link');
+    expect(link).toBeTruthy();
+    // Must reference the canonical OpenAPI spec and MCP server card so
+    // crawlers get discovery links from a single HEAD /.
+    expect(link).toContain('</openapi.json>');
+    expect(link).toContain('rel="service-desc"');
+    expect(link).toContain('</.well-known/mcp/server-card.json>');
+    expect(link).toContain('rel="mcp-server"');
+  });
+
+  it('GET / with Accept: text/markdown returns llms.txt as markdown', async () => {
+    const res = await SELF.fetch('https://c2pa-staging.mppfy.com/', {
+      headers: { accept: 'text/markdown' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/markdown');
+    const md = await res.text();
+    // Must be the same llms.txt body (single source of truth).
+    expect(md).toContain('# C2PAVerify');
+    expect(md).toContain('POST /verify');
+  });
+});
