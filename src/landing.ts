@@ -152,6 +152,8 @@ footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
   <a href="https://github.com/mppfy">GitHub</a>
   <a href="https://twitter.com/mppfy">X / Twitter</a>
   <a href="https://c2pa.mppfy.com/llms.txt">llms.txt</a>
+  <a href="https://c2pa.mppfy.com/legal/terms">Terms</a>
+  <a href="https://c2pa.mppfy.com/legal/privacy">Privacy</a>
   <span style="float: right;">MIT</span>
 </footer>
 

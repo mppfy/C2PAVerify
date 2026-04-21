@@ -17,6 +17,14 @@ type = "Text"
 globs = ["**/*.pem", "**/*.cfg"]
 fallthrough = true
 
+# Legal docs (ToS, Privacy) embedded as text modules — served verbatim at
+# /legal/*. Scoped to `**/legal/*.md` so unrelated .md files (READMEs, docs)
+# stay out of the worker bundle. See src/legal.ts.
+[[rules]]
+type = "Text"
+globs = ["**/legal/*.md"]
+fallthrough = true
+
 # Default (local dev) bindings — override per env below.
 # Local dev reuses staging D1/KV по умолчанию (safe — dev mode adapter no-op'ит payments).
 [vars]
