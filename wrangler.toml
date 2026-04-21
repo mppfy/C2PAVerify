@@ -64,7 +64,12 @@ DEFAULT_PROTOCOL = "mpp"
 # x402 on Base Sepolia testnet — free facilitator, testnet USDC.
 # X402_RECIPIENT_ADDRESS falls back to MPP_RECIPIENT_ADDRESS when unset.
 X402_NETWORK = "base-sepolia"
-X402_FACILITATOR_URL = "https://x402.org/facilitator"
+# Pool mode: comma-separated list, `url|label` per entry. Round-robin across
+# primaries; sticky verify↔settle (settle NEVER uses fallback — state lives
+# on the primary that verified). src/_vendor/adapters/x402-facilitator.ts.
+# Staging uses only x402.org (Sepolia). CDP is mainnet-only → no point
+# adding for testnet. Pool of 1 is valid and exercises pool code path.
+X402_FACILITATOR_URLS = "https://x402.org/facilitator|x402-public"
 # Axiom structured logs (Free/Personal tier — 500 GB/mo). AXIOM_TOKEN = secret.
 AXIOM_DATASET = "c2pa-verify"
 AXIOM_ORG_ID = "mppfy-r2a9"
@@ -109,13 +114,20 @@ ENVIRONMENT = "production"
 PAYMENT_MODE = "multi"
 DEFAULT_PROTOCOL = "mpp"
 X402_NETWORK = "base"
-# PayAI facilitator (free, public, supports Bazaar auto-catalog на первом
-# реальном платеже). Switched from x402.org (no catalog) чтобы попасть в
-# discovery для demand research. 100+ сервисов уже в каталоге по состоянию
-# на 2026-04. If PayAI добавит рейт-лимиты или проблемы — fallback: вернуть
-# "https://x402.org/facilitator" (verify/settle работает, catalog нет).
-# CDP facilitator (требует API key) добавим когда/если PayAI даст сигнал.
-X402_FACILITATOR_URL = "https://facilitator.payai.network"
+# Pool mode: multiple facilitators, round-robin, sticky verify↔settle.
+#   - PayAI (free, public): Bazaar auto-catalog на первом реальном платеже.
+#     100+ сервисов в каталоге. Дал самый чистый путь для demand research.
+#   - CDP (Coinbase Developer Platform): требует JWT auth через
+#     X402_CDP_API_KEY_ID/SECRET. Добавляет Bazaar listing в Coinbase
+#     экосистеме + enterprise reliability. Если CDP credentials не
+#     сетованы — вызовы туда будут unauthenticated и упадут, но другие
+#     primaries будут работать. Set secrets via:
+#       wrangler secret put X402_CDP_API_KEY_ID --env production
+#       wrangler secret put X402_CDP_API_KEY_SECRET --env production
+# Pool-level fallback = x402.org (no catalog, no auth, всегда доступен) —
+# добавляется автоматически в buildFacilitatorPool() если не дублирует
+# primary. См. src/index.ts::buildFacilitatorPool.
+X402_FACILITATOR_URLS = "https://facilitator.payai.network|payai,https://api.cdp.coinbase.com/platform/v2/x402|cdp"
 # Seed payer — наш собственный кошелёк для bootstrap-платежа, который
 # триггерит auto-list в PayAI Bazaar. verify() пометит metadata.source="seed"
 # для фильтрации при анализе органического трафика.
@@ -145,3 +157,9 @@ dataset = "c2pa_verify_calls_prod"
 #   X402_RECIPIENT_ADDRESS  — Base EOA 0x... (optional; defaults to MPP_RECIPIENT_ADDRESS
 #                             — same 0x address works across Tempo and Base because both
 #                             are EVM. Override only if wallet separation is desired.)
+#   X402_CDP_API_KEY_ID     — Coinbase Developer Platform API key ID (production only).
+#                             Get at https://portal.cdp.coinbase.com/access/api.
+#                             Without this, CDP facilitator calls will be unauthenticated
+#                             and rejected — other primaries in the pool keep working.
+#   X402_CDP_API_KEY_SECRET — CDP API key secret (PEM EC or base64 Ed25519).
+#                             Signed JWT via @coinbase/cdp-sdk auth at call time.
