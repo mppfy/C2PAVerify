@@ -2,10 +2,12 @@
  * C2PAVerify — Cloudflare Worker entry point.
  *
  * Single-service MPPFY deployment. Routes:
- *   GET  /               — service metadata (free)
- *   GET  /llms.txt       — agent-friendly spec (free)
- *   GET  /health         — health check (free)
- *   POST /verify         — C2PA verification (paid, 402 if unpaid)
+ *   GET  /                             — service metadata (free)
+ *   GET  /llms.txt                     — agent-friendly spec (free)
+ *   GET  /openapi.json                 — OpenAPI 3.1 discovery (free)
+ *   GET  /.well-known/mpp-services     — RFC 8615 alias → openapi.json (free)
+ *   GET  /health                       — health check (free)
+ *   POST /verify                       — C2PA verification (paid, 402 if unpaid)
  */
 
 import { Hono } from 'hono';
@@ -124,6 +126,7 @@ app.get('/', c => {
       metadata: 'GET /',
       spec: 'GET /llms.txt',
       openapi: 'GET /openapi.json',
+      wellKnown: 'GET /.well-known/mpp-services',
       health: 'GET /health',
       verify: 'POST /verify',
     },
@@ -150,7 +153,7 @@ ${c2paVerify.price.amount} ${c2paVerify.price.currency} per call
 ## Protocol
 MPP (Machine Payments Protocol) on Tempo chain
 See https://mpp.dev for SDK and spec
-OpenAPI discovery: GET /openapi.json
+OpenAPI discovery: GET /openapi.json (alias: GET /.well-known/mpp-services)
 
 ## Categories
 ${c2paVerify.categories.join(', ')}
@@ -178,9 +181,18 @@ app.get('/health', c => {
  *   - production (Tempo mainnet, chainId 4217): bridged USDC 0x20C0...E8b50
  *   - staging/dev (Tempo testnet, chainId 42431): pathUSD 0x20c0...0000
  * Amount in base units (6 decimals для TIP-20): "0.01" USDC = "10000".
+ *
+ * Served at two paths:
+ *   - /openapi.json                  — canonical MPP discovery URL
+ *   - /.well-known/mpp-services      — RFC 8615 well-known alias
+ * Both return identical payload; second form is surfaced for crawlers that
+ * probe `/.well-known/*` by convention (e.g. aggregators scanning new hosts).
  */
-app.get('/openapi.json', c => {
-  const isProd = c.env.ENVIRONMENT === 'production';
+function buildOpenApiSpec(
+  env: ServiceEnv,
+  requestUrl: string,
+): Record<string, unknown> {
+  const isProd = env.ENVIRONMENT === 'production';
   const currency = isProd
     ? '0x20C000000000000000000000b9537d11c60E8b50' // mainnet bridged USDC
     : '0x20c0000000000000000000000000000000000000'; // testnet pathUSD
@@ -190,22 +202,22 @@ app.get('/openapi.json', c => {
   // of fractional precision (e.g. "0.010000" for $0.01, "2.000000" for $2.00).
   // Anything else is displayed as-is: "10000" renders as $10,000.00.
   const priceUsdDecimal = parseFloat(c2paVerify.price.amount).toFixed(6);
-  const host = new URL(c.req.url).host;
+  const host = new URL(requestUrl).host;
   const baseUrl = `https://${host}`;
 
   // Whether x402 is advertised in discovery. True when PAYMENT_MODE is
   // 'x402' or 'multi'. In pure 'mpp' mode we omit x402 entirely so discovery
   // reflects runtime capability truthfully.
-  const x402Active = c.env.PAYMENT_MODE === 'x402' || c.env.PAYMENT_MODE === 'multi';
+  const x402Active = env.PAYMENT_MODE === 'x402' || env.PAYMENT_MODE === 'multi';
   const x402Network: 'base' | 'base-sepolia' =
-    c.env.X402_NETWORK ?? (isProd ? 'base' : 'base-sepolia');
+    env.X402_NETWORK ?? (isProd ? 'base' : 'base-sepolia');
   // USDC on Base — per Circle docs. Used for x402 discovery metadata only.
   const USDC_BASE_MAINNET = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
   const USDC_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
   const x402Asset =
-    c.env.X402_ASSET_ADDRESS ??
+    env.X402_ASSET_ADDRESS ??
     (x402Network === 'base' ? USDC_BASE_MAINNET : USDC_BASE_SEPOLIA);
-  const x402Recipient = c.env.X402_RECIPIENT_ADDRESS ?? c.env.MPP_RECIPIENT_ADDRESS;
+  const x402Recipient = env.X402_RECIPIENT_ADDRESS ?? env.MPP_RECIPIENT_ADDRESS;
   // USDC has 6 decimals on Base too. "0.01" → "10000" atomic units.
   const x402AtomicAmount = Math.round(
     parseFloat(c2paVerify.price.amount) * 1_000_000,
@@ -227,7 +239,7 @@ app.get('/openapi.json', c => {
     price: '0',
   };
 
-  return c.json({
+  return {
     openapi: '3.1.0',
     info: {
       title: c2paVerify.name,
@@ -236,8 +248,8 @@ app.get('/openapi.json', c => {
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
       'x-guidance': x402Active
-        ? 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Dual-protocol: MPP (0.01 USDC.e on Tempo) or x402 (0.01 USDC on Base). Clients pick protocol via `Authorization: Payment` (MPP) or `X-PAYMENT` (x402) header; override with `x-payment-protocol: mpp|x402`. Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.'
-        : 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.',
+        ? 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Dual-protocol: MPP (0.01 USDC.e on Tempo) or x402 (0.01 USDC on Base). Clients pick protocol via `Authorization: Payment` (MPP) or `X-PAYMENT` (x402) header; override with `x-payment-protocol: mpp|x402`. Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.well-known/mpp-services, GET /.'
+        : 'POST /verify with multipart file upload (image/video/audio, ≤25MB) OR JSON {"url": "https://..."} to extract and validate an embedded C2PA manifest. Requires MPP payment (0.01 USDC.e on Tempo mainnet). Response contains trust_chain classification (valid | partial | unknown), signed_by, claim_generator, and assertion labels. Free endpoints: GET /health, GET /llms.txt, GET /openapi.json, GET /.well-known/mpp-services, GET /.',
     },
     servers: [{ url: baseUrl }],
     'x-service-info': {
@@ -354,6 +366,15 @@ app.get('/openapi.json', c => {
           },
         },
       },
+      '/.well-known/mpp-services': {
+        get: {
+          summary: 'RFC 8615 well-known alias for /openapi.json',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': { description: 'Same payload as GET /openapi.json' },
+          },
+        },
+      },
       '/': {
         get: {
           summary: 'Service metadata (JSON)',
@@ -364,8 +385,17 @@ app.get('/openapi.json', c => {
         },
       },
     },
-  });
-});
+  };
+}
+
+app.get('/openapi.json', c => c.json(buildOpenApiSpec(c.env, c.req.url)));
+
+// RFC 8615 well-known alias — surfaces the same OpenAPI spec for crawlers
+// that probe `/.well-known/*` по конвенции. Kept intentionally identical
+// to /openapi.json so aggregators do not have to special-case the endpoint.
+app.get('/.well-known/mpp-services', c =>
+  c.json(buildOpenApiSpec(c.env, c.req.url)),
+);
 
 // ── Favicon ─────────────────────────────────────────────────
 // Inline SVG — zero-size deploy, MPPScan и browsers happy.

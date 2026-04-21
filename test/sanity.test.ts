@@ -34,4 +34,32 @@ describe('Worker framework sanity', () => {
     expect(text).toContain('C2PAVerify');
     expect(text).toContain('POST /verify');
   });
+
+  it('GET /openapi.json returns OpenAPI 3.1 spec', async () => {
+    const res = await SELF.fetch('https://c2pa-staging.mppfy.com/openapi.json');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      openapi: string;
+      info: { title: string };
+      paths: Record<string, unknown>;
+    };
+    expect(body.openapi).toBe('3.1.0');
+    expect(body.info.title).toBe('C2PAVerify');
+    expect(body.paths['/verify']).toBeDefined();
+    expect(body.paths['/.well-known/mpp-services']).toBeDefined();
+  });
+
+  it('GET /.well-known/mpp-services returns identical payload to /openapi.json', async () => {
+    const [wellKnownRes, openapiRes] = await Promise.all([
+      SELF.fetch('https://c2pa-staging.mppfy.com/.well-known/mpp-services'),
+      SELF.fetch('https://c2pa-staging.mppfy.com/openapi.json'),
+    ]);
+    expect(wellKnownRes.status).toBe(200);
+    expect(openapiRes.status).toBe(200);
+    const wellKnownBody = await wellKnownRes.json();
+    const openapiBody = await openapiRes.json();
+    // Both endpoints must return byte-identical JSON so aggregators can cache
+    // either path without hashing mismatch.
+    expect(wellKnownBody).toEqual(openapiBody);
+  });
 });
