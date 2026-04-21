@@ -226,3 +226,146 @@ export function createFacilitatorClient(
     },
   };
 }
+
+// ─── Facilitator Pool ───────────────────────────────────────────
+/**
+ * Multi-primary facilitator pool with sticky verify↔settle routing.
+ *
+ * **Why a pool:** CDP Bazaar (Coinbase discovery) and PayAI Bazaar each
+ * expose *their own* discovery catalog populated only from payments that
+ * pass through *their* facilitator. To be listed in both catalogs we must
+ * actually send a fraction of real traffic through each primary. Round-
+ * robin across `primaries` achieves this with zero extra state per
+ * request.
+ *
+ * **Why sticky verify↔settle:** x402 facilitators stash per-payment state
+ * between `/verify` (check signature/funds) and `/settle` (broadcast tx).
+ * If we verify on CDP and then settle on PayAI, PayAI does not know about
+ * this payment and rejects. Worse, in pathological races both could
+ * charge. So: once `pickForVerify()` returns a `PickedFacilitator`, the
+ * caller must do `verify()` and `settle()` on the *same* object.
+ *
+ * **Why settle has NO fallback:** verify failure → no money moved yet,
+ * safe to retry on fallback. Settle failure → either the tx actually went
+ * through and facilitator just can't report it (retry would double-spend),
+ * or it genuinely failed (fallback won't help — payment state is on the
+ * primary). Fail-closed: return `success:false`, caller omits receipt
+ * header, agent retries entire flow.
+ *
+ * **Fallback semantics:** exactly one fallback facilitator (typically
+ * x402.org/facilitator — no auth, no catalog, but functional). Used *only*
+ * if the picked primary's verify() throws or times out. Selection is not
+ * sticky for fallback — every primary shares the same fallback.
+ */
+
+export interface PoolPrimary {
+  /** Pre-built client. Usually from `createFacilitatorClient(...)`. */
+  readonly client: X402FacilitatorClient;
+  /** Short label for logs/observability. e.g. "payai", "cdp", "x402-public". */
+  readonly label: string;
+}
+
+export interface FacilitatorPoolOptions {
+  /** Ordered list of primaries. Round-robin across successive pickForVerify(). */
+  readonly primaries: readonly PoolPrimary[];
+  /**
+   * Optional single fallback facilitator. Used when a primary's verify()
+   * throws. Settlement NEVER fails over — see module JSDoc.
+   */
+  readonly fallback?: PoolPrimary;
+}
+
+export interface PickedFacilitator {
+  /** Label of the primary this picker is pinned to. */
+  readonly label: string;
+  /** Verify payment — tries primary once, then fallback if configured. */
+  verify(
+    payload: PaymentPayload,
+    requirements: PaymentRequirements,
+  ): Promise<VerifyResponse>;
+  /** Settle payment on pinned primary ONLY. No fallback. */
+  settle(
+    payload: PaymentPayload,
+    requirements: PaymentRequirements,
+  ): Promise<SettleResponse>;
+}
+
+export interface FacilitatorPool {
+  /**
+   * Pick a facilitator for a new payment. Round-robins across primaries
+   * across successive calls. The returned object must be used for BOTH
+   * verify() and settle() of the same payment.
+   */
+  pickForVerify(): PickedFacilitator;
+}
+
+export function createFacilitatorPool(
+  options: FacilitatorPoolOptions,
+): FacilitatorPool {
+  if (options.primaries.length === 0) {
+    throw new Error(
+      '[x402-facilitator-pool] requires at least one primary facilitator',
+    );
+  }
+
+  const primaries = [...options.primaries];
+  const fallback = options.fallback;
+  let cursor = 0;
+
+  function pickForVerify(): PickedFacilitator {
+    const primary = primaries[cursor % primaries.length]!;
+    cursor = (cursor + 1) % primaries.length;
+
+    return {
+      label: primary.label,
+      async verify(payload, requirements) {
+        try {
+          return await primary.client.verify(payload, requirements);
+        } catch (err) {
+          console.error(
+            `[x402-pool] primary verify failed (${primary.label} ${primary.client.url}):`,
+            err,
+          );
+          if (fallback) {
+            try {
+              const res = await fallback.client.verify(payload, requirements);
+              console.warn(
+                `[x402-pool] verify succeeded on fallback (${fallback.label} ${fallback.client.url})`,
+              );
+              return res;
+            } catch (fbErr) {
+              console.error(
+                `[x402-pool] fallback verify also failed (${fallback.label} ${fallback.client.url}):`,
+                fbErr,
+              );
+            }
+          }
+          return {
+            isValid: false,
+            invalidReason: 'facilitator_unavailable',
+            payer: undefined as never,
+          } as unknown as VerifyResponse;
+        }
+      },
+      async settle(payload, requirements) {
+        try {
+          return await primary.client.settle(payload, requirements);
+        } catch (err) {
+          console.error(
+            `[x402-pool] settle failed on pinned primary (${primary.label} ${primary.client.url}) — NOT falling back:`,
+            err,
+          );
+          return {
+            success: false,
+            errorReason: 'facilitator_unavailable',
+            transaction: '' as `0x${string}`,
+            network: requirements.network,
+            payer: '' as `0x${string}`,
+          } as unknown as SettleResponse;
+        }
+      },
+    };
+  }
+
+  return { pickForVerify };
+}

@@ -20,7 +20,10 @@ export interface ServiceEnv {
   X402_ENABLED?: string; // "true" | "false" — feature flag for dark launch
   X402_RECIPIENT_ADDRESS?: string; // 0x... Base EOA (chain-agnostic, may equal MPP_RECIPIENT_ADDRESS)
   X402_NETWORK?: 'base' | 'base-sepolia'; // Defaults to base-sepolia in staging, base in production
-  X402_FACILITATOR_URL?: string; // Defaults to https://x402.org/facilitator
+  X402_FACILITATOR_URL?: string; // Single-primary mode (legacy). Use X402_FACILITATOR_URLS for pool mode.
+  X402_FACILITATOR_URLS?: string; // Pool mode — comma-separated list of primary facilitators. Round-robin routed across primaries with sticky verify↔settle pinning. Each URL can have "|label" suffix: "https://facilitator.payai.network|payai,https://api.cdp.coinbase.com/platform/v2/x402|cdp". Labels default to host if omitted.
+  X402_CDP_API_KEY_ID?: string;   // secret — CDP API key ID for signed JWT auth on CDP facilitator URL
+  X402_CDP_API_KEY_SECRET?: string; // secret — CDP API key secret (PEM EC or base64 Ed25519) — see @coinbase/cdp-sdk auth docs
   X402_ASSET_ADDRESS?: string; // USDC contract — defaults per network
   X402_SEED_PAYERS?: string; // Comma-separated 0x... payer addresses whose payments are tagged `source=seed` in observability (excluded from organic-demand metrics). Empty = all traffic organic.
   DEFAULT_PROTOCOL?: 'mpp' | 'x402'; // Fallback when client sends no hints (default: 'mpp' during shadow rollout)

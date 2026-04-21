@@ -40,8 +40,8 @@ import type {
   PaymentVerification,
 } from './types';
 import {
-  createFacilitatorClient,
-  type X402FacilitatorClient,
+  type FacilitatorPool,
+  type PickedFacilitator,
 } from './x402-facilitator';
 
 // USDC contracts on supported networks (EIP-712 signing domain).
@@ -60,23 +60,12 @@ export interface X402AdapterConfig {
   /** Target network. Defaults to base-sepolia for staging safety. */
   network: 'base' | 'base-sepolia';
 
-  /** Facilitator URL. Defaults to public x402.org/facilitator. */
-  facilitatorUrl?: string;
-
   /**
-   * Fallback facilitator URL if primary fails/timeouts. Defaults to
-   * `https://x402.org/facilitator` (no-auth public). Disable fallback by
-   * explicitly passing the same URL as `facilitatorUrl`.
+   * Facilitator pool — provides sticky verify↔settle routing across
+   * multiple catalog facilitators (e.g. PayAI + CDP). Construct via
+   * `createFacilitatorPool(...)` in index.ts with per-URL auth.
    */
-  facilitatorFallbackUrl?: string;
-
-  /**
-   * Per-call facilitator timeout in ms. Single value applies to verify
-   * (tight, so agent MPP fallback kicks in faster) — settle uses a wider
-   * internal default. Override for stress-testing / degraded upstream
-   * experiments.
-   */
-  facilitatorTimeoutMs?: number;
+  facilitatorPool: FacilitatorPool;
 
   /**
    * Optional asset contract override. Falls back to USDC for the chosen
@@ -100,6 +89,11 @@ export interface X402AdapterConfig {
 interface PendingPayment {
   readonly decoded: PaymentPayload;
   readonly requirements: PaymentRequirements;
+  /**
+   * Pinned facilitator that handled verify() — settle() MUST use the same
+   * one. Cross-facilitator settle would miss state and could double-charge.
+   */
+  readonly picked: PickedFacilitator;
 }
 
 /**
@@ -142,15 +136,7 @@ export function buildX402Requirements(params: {
 }
 
 export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
-  const facilitator: X402FacilitatorClient = createFacilitatorClient({
-    url: config.facilitatorUrl ?? 'https://x402.org/facilitator',
-    ...(config.facilitatorFallbackUrl
-      ? { fallbackUrl: config.facilitatorFallbackUrl }
-      : {}),
-    ...(config.facilitatorTimeoutMs !== undefined
-      ? { timeoutMs: config.facilitatorTimeoutMs }
-      : {}),
-  });
+  const pool = config.facilitatorPool;
 
   const assetAddress =
     config.assetAddress ??
@@ -201,15 +187,22 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
         description: `Service: ${requirement.serviceId}`,
       });
 
-      // Delegate cryptographic + on-chain eligibility checks to facilitator.
-      const result = await facilitator.verify(decoded, requirements);
+      // Pick a facilitator via pool (round-robin across primaries).
+      // Same `picked` will be used for settle() — see PendingPayment doc.
+      const picked = pool.pickForVerify();
+
+      // Delegate cryptographic + on-chain eligibility checks.
+      const result = await picked.verify(decoded, requirements);
       if (!result.isValid) {
-        console.warn('[x402] verify rejected:', result.invalidReason);
+        console.warn(
+          `[x402] verify rejected via ${picked.label}:`,
+          result.invalidReason,
+        );
         return null;
       }
 
-      // Stash for attachReceipt → settle().
-      pending.set(request, { decoded, requirements });
+      // Stash for attachReceipt → settle(). Include pinned facilitator.
+      pending.set(request, { decoded, requirements, picked });
 
       // Tag source for demand-signal hygiene. `seed` = our own test
       // payments (excluded from organic metrics). `organic` = anyone else.
@@ -226,6 +219,7 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
           network: config.network,
           scheme: 'exact',
           source,
+          facilitator: picked.label,
         },
       };
     },
@@ -304,20 +298,22 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
       }
 
       const source = verification.metadata?.source ?? 'organic';
+      const facilitatorLabel = stash.picked.label;
 
       let settlement: SettleResponse;
       try {
-        settlement = await facilitator.settle(stash.decoded, stash.requirements);
+        // Sticky: use the picker that also ran verify(). See PendingPayment.
+        settlement = await stash.picked.settle(stash.decoded, stash.requirements);
       } catch (err) {
         console.error(
-          `[x402] settle threw (source=${source}, payer=${verification.payerAddress}):`,
+          `[x402] settle threw (facilitator=${facilitatorLabel}, source=${source}, payer=${verification.payerAddress}):`,
           err,
         );
         return response;
       }
       if (!settlement.success) {
         console.error(
-          `[x402] settle failed (source=${source}, payer=${verification.payerAddress}):`,
+          `[x402] settle failed (facilitator=${facilitatorLabel}, source=${source}, payer=${verification.payerAddress}):`,
           settlement.errorReason,
         );
         return response;
@@ -327,7 +323,7 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
       // in CF logs (`source=seed` / `source=organic`). Analytics Engine
       // still gets the signal via wrapHandler's verification.metadata.
       console.log(
-        `[x402] settled source=${source} payer=${verification.payerAddress} tx=${settlement.transaction}`,
+        `[x402] settled facilitator=${facilitatorLabel} source=${source} payer=${verification.payerAddress} tx=${settlement.transaction}`,
       );
 
       const headers = new Headers(response.headers);
@@ -336,6 +332,7 @@ export function createX402Adapter(config: X402AdapterConfig): PaymentAdapter {
         headers.set('x-payment-tx-hash', settlement.transaction);
       }
       headers.set('x-payment-source', String(source));
+      headers.set('x-payment-facilitator', facilitatorLabel);
 
       return new Response(response.body, {
         status: response.status,

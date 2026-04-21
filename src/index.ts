@@ -24,6 +24,17 @@ import type { ServiceEnv } from './_vendor/core/types';
 import { createMPPAdapter } from './_vendor/adapters/mpp';
 import { noneAdapter } from './_vendor/adapters/none';
 import { createX402Adapter } from './_vendor/adapters/x402';
+import {
+  createFacilitatorClient,
+  createFacilitatorPool,
+  type FacilitatorPool,
+  type PoolPrimary,
+} from './_vendor/adapters/x402-facilitator';
+import {
+  isCdpFacilitatorUrl,
+  parseFacilitatorUrl,
+} from './_vendor/adapters/x402-url';
+import { createCdpAuthHeaders } from '@coinbase/x402';
 import { createMultiProtocolAdapter } from './_vendor/adapters/multi';
 import type { PaymentAdapter, PaymentRequirement } from './_vendor/adapters/types';
 import { wrapHandler } from './_vendor/core/observability';
@@ -73,6 +84,147 @@ function getAdapter(env: ServiceEnv): PaymentAdapter {
   return cachedAdapter;
 }
 
+/**
+ * Default label derived from host when URL entry has no `|label` suffix.
+ * Examples:
+ *   https://facilitator.payai.network        → "payai"
+ *   https://api.cdp.coinbase.com/platform/v2 → "cdp"
+ *   https://x402.org/facilitator             → "x402-public"
+ */
+function defaultLabelFor(url: string): string {
+  try {
+    const host = new URL(url).hostname;
+    if (host.includes('payai')) return 'payai';
+    if (host.includes('cdp.coinbase')) return 'cdp';
+    if (host.includes('x402.org')) return 'x402-public';
+    return host.replace(/\..*$/, '');
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Parse `X402_FACILITATOR_URLS` — comma-separated list with optional
+ * `|label` suffix per entry. Empty / undefined → empty array (caller
+ * falls back to legacy single-URL mode).
+ *
+ * Grammar: `url[|label](,url[|label])*`
+ *
+ * Example:
+ *   "https://facilitator.payai.network|payai,https://api.cdp.coinbase.com/platform/v2/x402|cdp"
+ */
+function parseFacilitatorUrls(
+  raw: string | undefined,
+): Array<{ url: string; label: string }> {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry.length > 0)
+    .map(entry => {
+      const pipeIdx = entry.indexOf('|');
+      if (pipeIdx === -1) {
+        return { url: entry, label: defaultLabelFor(entry) };
+      }
+      return {
+        url: entry.slice(0, pipeIdx).trim(),
+        label: entry.slice(pipeIdx + 1).trim() || defaultLabelFor(entry),
+      };
+    });
+}
+
+/**
+ * Build the facilitator pool from env. Two modes:
+ *
+ * 1. **Pool mode** — `X402_FACILITATOR_URLS` is set. Each primary URL
+ *    becomes a pool entry. CDP URLs (`api.cdp.coinbase.com`) auto-inject
+ *    `createCdpAuthHeaders(X402_CDP_API_KEY_ID, X402_CDP_API_KEY_SECRET)`
+ *    for JWT auth. Non-CDP URLs stay no-auth.
+ *
+ * 2. **Single-primary legacy** — only `X402_FACILITATOR_URL` set (e.g.
+ *    PayAI only). One primary, no CDP auth.
+ *
+ * Fallback facilitator (`x402.org/facilitator`, no catalog but reliable)
+ * is always added unless the only primary already equals it.
+ */
+function buildFacilitatorPool(env: ServiceEnv): FacilitatorPool {
+  const timeoutMs = env.X402_FACILITATOR_TIMEOUT_MS
+    ? Number.parseInt(env.X402_FACILITATOR_TIMEOUT_MS, 10)
+    : Number.NaN;
+  const timeoutOpt =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {};
+
+  const poolEntries = parseFacilitatorUrls(env.X402_FACILITATOR_URLS);
+  const primaryUrls: Array<{ url: string; label: string }> =
+    poolEntries.length > 0
+      ? poolEntries
+      : env.X402_FACILITATOR_URL
+        ? [
+            {
+              url: env.X402_FACILITATOR_URL,
+              label: defaultLabelFor(env.X402_FACILITATOR_URL),
+            },
+          ]
+        : [{ url: 'https://x402.org/facilitator', label: 'x402-public' }];
+
+  const primaries: PoolPrimary[] = primaryUrls.map(({ url, label }) => {
+    // Reject plaintext HTTP early — facilitator payloads include EIP-712
+    // signatures + payer addresses; silently forwarding those over http://
+    // would be a privacy regression and a signal of operator misconfig.
+    const parsed = parseFacilitatorUrl(url); // throws on http:// or malformed
+
+    // CDP detection via EXACT hostname match (see x402-url.ts rationale).
+    // NEVER use substring matching here — credential exfiltration risk.
+    const isCdp = isCdpFacilitatorUrl(url);
+    const createAuthHeaders =
+      isCdp && env.X402_CDP_API_KEY_ID && env.X402_CDP_API_KEY_SECRET
+        ? createCdpAuthHeaders(env.X402_CDP_API_KEY_ID, env.X402_CDP_API_KEY_SECRET)
+        : undefined;
+
+    if (isCdp && !createAuthHeaders) {
+      console.warn(
+        `[x402] CDP facilitator URL configured (${parsed.hostname}) but X402_CDP_API_KEY_ID/SECRET missing — calls will be unauthenticated and rejected by CDP`,
+      );
+    }
+
+    return {
+      client: createFacilitatorClient({
+        url,
+        // Disable legacy single-URL fallback inside each client — the pool
+        // handles fallback coherently at verify-time (one shared fallback,
+        // not one per primary).
+        fallbackUrl: url,
+        ...timeoutOpt,
+        ...(createAuthHeaders ? { createAuthHeaders } : {}),
+      }),
+      label,
+    };
+  });
+
+  // Always add x402.org as pool-level fallback unless it's already a
+  // primary (redundant). No auth, no catalog, but always available.
+  const fallbackUrl =
+    env.X402_FACILITATOR_FALLBACK_URL ?? 'https://x402.org/facilitator';
+  const fallbackAlreadyPrimary = primaries.some(
+    p => p.client.url === fallbackUrl,
+  );
+  const fallback: PoolPrimary | undefined = fallbackAlreadyPrimary
+    ? undefined
+    : {
+        client: createFacilitatorClient({
+          url: fallbackUrl,
+          fallbackUrl, // no cascading
+          ...timeoutOpt,
+        }),
+        label: defaultLabelFor(fallbackUrl),
+      };
+
+  return createFacilitatorPool({
+    primaries,
+    ...(fallback ? { fallback } : {}),
+  });
+}
+
 function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
   const recipient = env.X402_RECIPIENT_ADDRESS ?? env.MPP_RECIPIENT_ADDRESS;
   if (!recipient) {
@@ -90,21 +242,10 @@ function buildX402Adapter(env: ServiceEnv): PaymentAdapter {
         .filter(s => s.length > 0)
     : [];
 
-  // Parse timeout override если задан. Invalid строка → ignore.
-  const timeoutMs = env.X402_FACILITATOR_TIMEOUT_MS
-    ? Number.parseInt(env.X402_FACILITATOR_TIMEOUT_MS, 10)
-    : Number.NaN;
-
   return createX402Adapter({
     recipientAddress: recipient,
     network,
-    ...(env.X402_FACILITATOR_URL ? { facilitatorUrl: env.X402_FACILITATOR_URL } : {}),
-    ...(env.X402_FACILITATOR_FALLBACK_URL
-      ? { facilitatorFallbackUrl: env.X402_FACILITATOR_FALLBACK_URL }
-      : {}),
-    ...(Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? { facilitatorTimeoutMs: timeoutMs }
-      : {}),
+    facilitatorPool: buildFacilitatorPool(env),
     ...(env.X402_ASSET_ADDRESS ? { assetAddress: env.X402_ASSET_ADDRESS } : {}),
     ...(seedPayers.length > 0 ? { seedPayers } : {}),
   });
