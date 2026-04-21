@@ -510,11 +510,17 @@ app.get('/robots.txt', c => {
   const isApex = host === 'mppfy.com' || host === 'www.mppfy.com';
   const baseUrl = isApex ? 'https://mppfy.com' : `https://${host}`;
 
-  const body = `# ${isApex ? 'MPPFY' : 'C2PAVerify'} — robots.txt
-# Generated dynamically; edit src/index.ts to change.
-
-User-agent: *
+  // NOTE: Content-Signal MUST be within the first ~512 bytes of robots.txt
+  // because scanners (isitagentready.com) only parse a body preview. We put
+  // it in the wildcard User-agent group, directly after Allow, per Cloudflare
+  // content-signals spec (blog.cloudflare.com/content-signals). Long prose
+  // comments go to the bottom so preview-truncated parsers still catch the
+  // directive.
+  const body = `User-agent: *
 Allow: /
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+
+Sitemap: ${baseUrl}/sitemap.xml
 
 # Explicit allow for major AI crawlers — content here is a paid API
 # (POST /verify). Marketing copy and discovery endpoints are fine to index.
@@ -539,15 +545,11 @@ Allow: /
 User-agent: CCBot
 Allow: /
 
-# Cloudflare content-signals (blog.cloudflare.com/content-signals).
-# Directive name is singular per spec (Content-Signal:). Applies to the
-# preceding User-agent group (here: wildcard *, scoped to all crawlers).
-# search=yes: allow traditional search indexing.
-# ai-input=yes: allow RAG / prompt-time retrieval.
-# ai-train=no: public copy OK, but don't train foundation models on paid API output.
-Content-Signal: search=yes, ai-input=yes, ai-train=no
-
-Sitemap: ${baseUrl}/sitemap.xml
+# ${isApex ? 'MPPFY' : 'C2PAVerify'} — robots.txt (generated; edit src/index.ts)
+# Content-Signal semantics:
+#   search=yes    — allow traditional search indexing.
+#   ai-input=yes  — allow RAG / prompt-time retrieval.
+#   ai-train=no   — public copy OK, don't train foundation models on paid API output.
 `;
   return c.text(body, 200, {
     'content-type': 'text/plain; charset=utf-8',
