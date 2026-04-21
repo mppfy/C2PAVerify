@@ -159,6 +159,7 @@ async function main() {
     'x-payment-amount',
     'x-payment-source',
     'x-payment-tx-hash',
+    'x-payment-facilitator',
     'x-payment-response',
   ]) {
     const v = paidRes.headers.get(name);

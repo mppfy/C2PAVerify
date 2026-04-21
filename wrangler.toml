@@ -139,7 +139,19 @@ X402_FACILITATOR_URLS = "https://facilitator.payai.network|payai,https://api.cdp
 # Seed payer — наш собственный кошелёк для bootstrap-платежа, который
 # триггерит auto-list в PayAI Bazaar. verify() пометит metadata.source="seed"
 # для фильтрации при анализе органического трафика.
-X402_SEED_PAYERS = "0x30A4E38Fc66e87F8280A74b15485603aC7145568"
+#
+# SECURITY INCIDENT 2026-04-20: предыдущий seed wallet
+# 0x30A4E38Fc66e87F8280A74b15485603aC7145568 был скомпрометирован
+# (sweeper-bot `0x14f9f76863b57e89f2d482557828337234dcacad` слил 9.49 USDC
+# в tx 0x2bc5506cb823f65aec8b8373ca027c4b393a7422c5fe896f2dd74d0848aef01b).
+# PK `0xfcece313...cbb8` публично скомпрометирован — не восстанавливать.
+# При создании нового seed wallet:
+#   1) PK НЕ передавать через chat/logs/scripts. Только `.dev.vars.seed`
+#      локально (см. .gitignore) — одноразово, затем `rm -P`.
+#   2) Запускать seed-скрипт через `source .dev.vars.seed && SEED_PK=...`
+#      — env var не попадает в output.
+#   3) Пополнить только до ~$0.05 USDC; после seed-платежа вывести остаток.
+X402_SEED_PAYERS = ""
 # Axiom structured logs (Free/Personal tier — 500 GB/mo). AXIOM_TOKEN = secret.
 AXIOM_DATASET = "c2pa-verify"
 AXIOM_ORG_ID = "mppfy-r2a9"
