@@ -1,7 +1,7 @@
 # Terms of Service — C2PAVerify
 
 **Effective date:** 2026-04-21
-**Version:** 1.0.0-mvp
+**Version:** 1.0.0
 
 ---
 
@@ -18,9 +18,10 @@
 ## 1. Who we are and what this is
 
 This agreement ("**Terms**") is between you ("**User**", "**you**") and
-`[OPERATOR_ENTITY]` ("**Operator**", "**we**", "**us**"), governing your
-use of the C2PAVerify API (the "**Service**") available at
-`https://c2pa.mppfy.com` and any related endpoints.
+**TheLuxArmor LLC**, a Wyoming limited liability company ("**Operator**",
+"**we**", "**us**"), governing your use of the C2PAVerify API (the
+"**Service**") available at `https://c2pa.mppfy.com` and any related
+endpoints.
 
 The Service is a machine-readable HTTP API. It has no accounts, no user
 registration, and no human-facing interface beyond documentation. Agents,
@@ -393,7 +394,7 @@ We explicitly do **not** commit to:
 
 ### 11.2 Responsible disclosure
 
-If you discover a security vulnerability, email `[SECURITY_EMAIL]`
+If you discover a security vulnerability, email `security@mppfy.com`
 before public disclosure. We will acknowledge within 5 business days.
 We do not operate a paid bug-bounty program; disclosure is goodwill-
 based. Acting in bad faith (exploit-first-disclose-later, holding the
@@ -434,7 +435,7 @@ and 15 survive termination.
 
 ### 13.1 Governing law
 
-These Terms are governed by the laws of **`[JURISDICTION]`**, without
+These Terms are governed by the laws of **State of Wyoming, USA**, without
 regard to its conflict-of-laws rules.
 
 ### 13.2 Dispute resolution
@@ -444,7 +445,7 @@ arising out of these Terms through good-faith written negotiation for
 at least thirty (30) days.
 
 If unresolved, disputes will be brought exclusively in the courts of
-**`[DISPUTE_VENUE]`**, and both parties consent to personal jurisdiction
+**the state and federal courts located in Laramie County, Wyoming**, and both parties consent to personal jurisdiction
 there.
 
 ### 13.3 No class actions
@@ -499,11 +500,11 @@ the English version controls in case of conflict.
 
 ## 15. Contact
 
-For legal inquiries: **`[CONTACT_EMAIL]`**
-For security disclosure: **`[SECURITY_EMAIL]`**
+For legal inquiries: **legal@mppfy.com**
+For security disclosure: **security@mppfy.com**
 
-Operator: **`[OPERATOR_ENTITY]`**, governed by the laws of
-**`[JURISDICTION]`**.
+Operator: **TheLuxArmor LLC**, a Wyoming limited liability company,
+governed by the laws of the **State of Wyoming, USA**.
 
 ---
 
@@ -511,4 +512,5 @@ Operator: **`[OPERATOR_ENTITY]`**, governed by the laws of
 
 | Date | Version | Summary |
 |---|---|---|
-| 2026-04-21 | 1.0.0-mvp | Initial publication. |
+| 2026-04-21 | 1.0.0-mvp | Initial publication (draft with placeholders). |
+| 2026-04-21 | 1.0.0 | Filled Operator = TheLuxArmor LLC (Wyoming), governing law = Wyoming, dispute venue = Laramie County WY courts, contact = legal@mppfy.com, security = security@mppfy.com. First legally-operational version. |

@@ -102,6 +102,30 @@ describe('GET /legal/terms', () => {
       const md = plain(await res.text());
       expect(md).toMatch(/sanctions|ofac|export control/);
     });
+
+    it('names the specific operator, governing law, and dispute venue', async () => {
+      // Guards against accidental revert to `[OPERATOR_ENTITY]` / `[JURISDICTION]`
+      // placeholders from the MVP draft. If someone rewrites these clauses, the
+      // entity + venue MUST stay explicit — a ToS that points at a placeholder
+      // is not enforceable.
+      const res = await SELF.fetch(
+        'https://c2pa-staging.mppfy.com/legal/terms',
+      );
+      const text = await res.text();
+      expect(text).toContain('TheLuxArmor LLC');
+      expect(text).toContain('Wyoming');
+      expect(text).toContain('Laramie County');
+      expect(text).toContain('legal@mppfy.com');
+      expect(text).toContain('security@mppfy.com');
+      // Guard against accidental regression to Delaware wording from the
+      // earlier (incorrect) placeholder fill.
+      expect(text).not.toContain('Delaware');
+      expect(text).not.toContain('New Castle County');
+      // No stray bracketed placeholders anywhere in the body.
+      expect(text).not.toMatch(
+        /\[(OPERATOR_ENTITY|JURISDICTION|DISPUTE_VENUE|CONTACT_EMAIL|SECURITY_EMAIL|EFFECTIVE_DATE)\]/,
+      );
+    });
   });
 });
 
@@ -151,6 +175,21 @@ describe('GET /legal/privacy', () => {
       );
       const md = await res.text();
       expect(md).toMatch(/\d+\s*days/i);
+    });
+
+    it('names the data controller + contact email without placeholders', async () => {
+      const res = await SELF.fetch(
+        'https://c2pa-staging.mppfy.com/legal/privacy',
+      );
+      const text = await res.text();
+      expect(text).toContain('TheLuxArmor LLC');
+      expect(text).toContain('Wyoming');
+      expect(text).toContain('legal@mppfy.com');
+      expect(text).toContain('security@mppfy.com');
+      expect(text).not.toContain('Delaware');
+      expect(text).not.toMatch(
+        /\[(OPERATOR_ENTITY|JURISDICTION|DISPUTE_VENUE|CONTACT_EMAIL|SECURITY_EMAIL|EFFECTIVE_DATE)\]/,
+      );
     });
   });
 });
