@@ -40,6 +40,7 @@ import type { PaymentAdapter, PaymentRequirement } from './_vendor/adapters/type
 import { wrapHandler } from './_vendor/core/observability';
 import { c2paVerify } from './service';
 import { renderLanding } from './landing';
+import { TERMS, PRIVACY, legalResponse } from './legal';
 import { captureException } from './observability/sentry';
 import { sendLog } from './observability/axiom';
 
@@ -306,6 +307,11 @@ const DISCOVERY_LINK_HEADER = [
   '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"',
   '</.well-known/mcp/server-card.json>; rel="mcp-server"; type="application/json"',
   '</llms.txt>; rel="alternate"; type="text/plain"',
+  // RFC 8288 `rel="terms-of-service"` + `rel="privacy-policy"` — surfaced
+  // so crawlers and agent discovery loops (e.g. isitagentready) pick up
+  // legal docs without parsing OpenAPI. Markdown content-type reflected.
+  '</legal/terms>; rel="terms-of-service"; type="text/markdown"',
+  '</legal/privacy>; rel="privacy-policy"; type="text/markdown"',
 ].join(', ');
 
 app.get('/', c => {
@@ -362,6 +368,18 @@ app.get('/llms.txt', c => {
 app.get('/health', c => {
   return c.json({ status: 'ok', service: c2paVerify.id, env: c.env.ENVIRONMENT });
 });
+
+// ── Legal docs ──────────────────────────────────────────────
+// Served as markdown (text/plain on explicit Accept: text/plain).
+// Agents reaching /openapi.json get `info.termsOfService` pointing here.
+// The markdown itself is embedded at build time from docs/legal/*.md; see
+// src/legal.ts + wrangler.toml Text rule.
+app.get('/legal/terms', c =>
+  legalResponse(TERMS, c.req.header('accept') ?? ''),
+);
+app.get('/legal/privacy', c =>
+  legalResponse(PRIVACY, c.req.header('accept') ?? ''),
+);
 
 /**
  * OpenAPI 3.1 discovery document per MPP spec.
@@ -437,6 +455,10 @@ function buildOpenApiSpec(
       title: c2paVerify.name,
       version: '0.2.0',
       description: c2paVerify.description,
+      // OpenAPI 3.1 `termsOfService` (URI): surfaces ToS to agents that
+      // parse discovery. Keep value ABSOLUTE — many OpenAPI parsers do
+      // not resolve it against `servers[].url`.
+      termsOfService: `${baseUrl}/legal/terms`,
       // Short agent-readable hint rendered by MPPScan и other aggregators.
       // Keep it terse — target audience is automated clients, not humans.
       'x-guidance': x402Active
@@ -589,6 +611,28 @@ function buildOpenApiSpec(
           },
         },
       },
+      '/legal/terms': {
+        get: {
+          summary: 'Terms of Service (markdown)',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': {
+              description: 'text/markdown body with binding service terms',
+            },
+          },
+        },
+      },
+      '/legal/privacy': {
+        get: {
+          summary: 'Privacy Policy (markdown)',
+          'x-payment-info': freePayment,
+          responses: {
+            '200': {
+              description: 'text/markdown body with data processing policy',
+            },
+          },
+        },
+      },
       '/robots.txt': {
         get: {
           summary: 'robots.txt with AI-bot allow rules and sitemap link',
@@ -720,6 +764,8 @@ app.get('/sitemap.xml', c => {
           priority: '0.8',
           changefreq: 'weekly',
         },
+        { loc: `${baseUrl}/legal/terms`, priority: '0.6', changefreq: 'monthly' },
+        { loc: `${baseUrl}/legal/privacy`, priority: '0.6', changefreq: 'monthly' },
       ];
 
   const xml =
