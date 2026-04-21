@@ -22,3 +22,9 @@ declare module '*.cfg' {
   const text: string;
   export default text;
 }
+// Markdown legal docs served verbatim at /legal/* (scoped to **/legal/*.md
+// via wrangler rule so unrelated .md files in the repo are not bundled).
+declare module '*.md' {
+  const text: string;
+  export default text;
+}
