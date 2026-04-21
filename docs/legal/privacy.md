@@ -1,7 +1,7 @@
 # Privacy Policy — C2PAVerify
 
 **Effective date:** 2026-04-21
-**Version:** 1.0.0-mvp
+**Version:** 1.0.0
 
 ---
 
@@ -17,11 +17,11 @@
 
 ## 1. Who is the data controller
 
-`[OPERATOR_ENTITY]` ("**Operator**", "**we**", "**us**") controls any
-personal data processed in connection with the C2PAVerify API (the
-"**Service**") at `https://c2pa.mppfy.com`.
+**TheLuxArmor LLC**, a Wyoming limited liability company ("**Operator**",
+"**we**", "**us**"), controls any personal data processed in connection
+with the C2PAVerify API (the "**Service**") at `https://c2pa.mppfy.com`.
 
-Contact for privacy inquiries: **`[CONTACT_EMAIL]`**.
+Contact for privacy inquiries: **legal@mppfy.com**.
 
 ---
 
@@ -175,7 +175,7 @@ provide one or more of:
 - Payer wallet address(es) you used
 - Transaction hash(es) of payments you made
 
-Email **`[CONTACT_EMAIL]`** with the Subject line `Data Subject Request
+Email **legal@mppfy.com** with the Subject line `Data Subject Request
 — [access | erasure | etc.]` and include the identifying information
 above.
 
@@ -207,7 +207,7 @@ We do **not** operate a SOC 2 / ISO 27001 program at MVP scale. If your
 use case requires certified processing, this Service is not suitable
 for you at this time.
 
-Report vulnerabilities to **`[SECURITY_EMAIL]`** — see Terms §11.2.
+Report vulnerabilities to **security@mppfy.com** — see Terms §11.2.
 
 ---
 
@@ -216,7 +216,7 @@ Report vulnerabilities to **`[SECURITY_EMAIL]`** — see Terms §11.2.
 The Service is not directed at children under 16. We do not knowingly
 collect personal data from children. If you believe a child has used
 the Service and their data should be removed, email
-**`[CONTACT_EMAIL]`**.
+**legal@mppfy.com**.
 
 ---
 
@@ -231,12 +231,12 @@ Service after a change constitutes acceptance of the updated Policy.
 
 ## 11. Contact
 
-**`[CONTACT_EMAIL]`** — privacy inquiries and data subject requests.
+**legal@mppfy.com** — privacy inquiries and data subject requests.
 
-**`[SECURITY_EMAIL]`** — security disclosure.
+**security@mppfy.com** — security disclosure.
 
-Operator: **`[OPERATOR_ENTITY]`**, governed by the laws of
-**`[JURISDICTION]`**.
+Operator: **TheLuxArmor LLC**, a Wyoming limited liability company,
+governed by the laws of the **State of Wyoming, USA**.
 
 ---
 
@@ -244,4 +244,5 @@ Operator: **`[OPERATOR_ENTITY]`**, governed by the laws of
 
 | Date | Version | Summary |
 |---|---|---|
-| 2026-04-21 | 1.0.0-mvp | Initial publication. |
+| 2026-04-21 | 1.0.0-mvp | Initial publication (draft with placeholders). |
+| 2026-04-21 | 1.0.0 | Filled Operator = TheLuxArmor LLC (Wyoming), governing law = Wyoming, contact = legal@mppfy.com, security = security@mppfy.com. First legally-operational version. |
