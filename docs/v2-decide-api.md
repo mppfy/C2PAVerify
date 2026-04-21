@@ -1,5 +1,13 @@
 # `/v1/decide` — v2 Roadmap Spec
 
+> **⚠️ SUPERSEDED 2026-04-20 by [`v2-multi-signal-authenticity.md`](./v2-multi-signal-authenticity.md) per [ADR-003](../../mpp-project/architecture/adr-003-m6-multi-signal-pivot.md).**
+>
+> **Why superseded:** C2PA-only policy layer не решает 95%-coverage gap (most web content без C2PA credentials → verdict `warn/reject` без actionable signal). Replaced by multi-signal authenticity engine (C2PA + EXIF + known-tool + perceptual hash).
+>
+> This document retained **for historical context only**. Do not implement.
+
+---
+
 **Status:** Planning only. Not scheduled. Blocked on traffic signal from current `POST /verify` (M6).
 
 **Trigger to build:** `POST /verify` >= 100 requests/day sustained over 14 days, OR 3+ customer interviews requesting policy verdict output.
